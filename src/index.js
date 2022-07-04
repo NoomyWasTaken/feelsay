@@ -28,8 +28,8 @@ const createWindow = () => {
   // and load the index.html of the app.
   mainWindow.loadFile(path.join(__dirname, 'index.html'));
 
-  // Open the DevTools.
-  mainWindow.webContents.openDevTools();
+  // Open the DevTools. Uncomment to use
+  // mainWindow.webContents.openDevTools();
 
   ipcMain.on('closeApp', () => {
     console.log('clicked on close btn');
@@ -50,6 +50,27 @@ const createWindow = () => {
     }
   });
 
+  ipcMain.handle("sources/get", async (event, data) => {
+    const inputSources = await desktopCapturer.getSources({
+      types: ['window', 'desktop']
+    });
+
+    const audioOptionsMenu = Menu.buildFromTemplate(
+      inputSources.map(source => {
+        return {
+          label: source.name,
+          click: () => {
+            console.log(source);
+            mainWindow.webContents.send('SET_SOURCE', source)
+            return source;
+          }
+        };
+      })
+    );
+
+    audioOptionsMenu.popup();
+  });
+
 };
 
 const createSubtitleWindow = () => {
@@ -67,6 +88,13 @@ const createSubtitleWindow = () => {
       nodeIntegration: false,
       // devTools: false,
     }
+  });
+
+  subtitleWindow.setAlwaysOnTop(true, 'screen-saver')
+
+  ipcMain.on('closeApp', () => {
+    console.log('clicked on close btn');
+    subtitleWindow.close();
   });
 
   subtitleWindow.loadFile(path.join(__dirname, 'subtitle.html'));
@@ -98,48 +126,3 @@ app.on('activate', () => {
 // code. You can also put them in separate files and import them here.
 
 ipcMain.on('start', createSubtitleWindow);
-
-ipcMain.handle("sources/get", async (event, data) => {
-  const inputSources = await desktopCapturer.getSources({
-    types: ['window']
-  });
-
-  const audioOptionsMenu = Menu.buildFromTemplate(
-    inputSources.map(source => {
-      return {
-        label: source.name,
-        click: () => {
-          console.log(source);
-          return source;
-        }
-      };
-    })
-  );
-
-  audioOptionsMenu.popup();
-  
-  // const audioOptionsMenu = Menu.buildFromTemplate(
-  //   inputSources.map(source => {
-  //     return {
-  //       label: source.name,
-  //       click: () => selectSource()
-  //     };
-  //   })
-  // );
-
-  // audioOptionsMenu.popup();
-
-  // desktopCapturer.getSources({ types: ['window', 'screen'] }).then(async sources => {
-  //   for (const source of sources) {
-  //     if (source.name === 'Electron') {
-  //       mainWindow.webContents.send('SET_SOURCE', source.id)
-  //       return
-  //     }
-  //   }
-  // })
-  // return "here is some data"
-});
-
-async function selectSource(source) {
-  audioSelectBtn
-}

@@ -1,3 +1,4 @@
+// buttons
 closeBtn.addEventListener('click', () => {
     electronAPI.closeApp();
     console.log("Clicked close");
@@ -13,26 +14,17 @@ maxResBtn.addEventListener('click', () => {
     console.log("Clicked maximize restore");
 })
 
+// open new window and start speech recognition
 startBtn.addEventListener('click', () => {
     electronAPI.start();
-    console.log("Clicked on start");
+    console.log("Clicked start");
 })
 
+// get the available audio sources
 targetBtn.addEventListener('click', () => {
     getAudioSources();
 })
 
-// // Buttons
-// const targetBtn = document.getElementById('targetBtn');
-// const startBtn = document.getElementById('startBtn');
-// targetBtn.onclick = getAudioSources;
-
-// //const { desktopCapturer } = require('electron');
-// //const { Menu } = require('@electron/remote');
-
-// //Get the available audio sources
 async function getAudioSources() {
     const sources = await electronAPI.audioSources();
-    setTimeout(console.log(sources), 5000);
-    
 }
