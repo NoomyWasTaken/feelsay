@@ -30,24 +30,22 @@ pub fn run() {
                 println!("app: main close requested; cleaning up overlay and audio meter");
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
-                    let _ = state.audio_meter().stop();
-                    let _ = state.mark_overlay_closed();
-                }
-                if let Err(error) = overlay::destroy_overlay_window(app, "main window close") {
-                    eprintln!("failed to destroy overlay during main close: {error}");
+                    if let Err(error) = overlay::close_overlay(app, &state, "main window close") {
+                        eprintln!("failed to close overlay during main close: {error}");
+                    }
                 }
             }
 
-            if window.label() == overlay::OVERLAY_LABEL
-                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
-            {
-                println!("overlay: native close requested");
-                let app = window.app_handle();
-                if let Some(state) = app.try_state::<AppState>() {
-                    let _ = state.audio_meter().stop();
-                    if state.mark_overlay_closed() {
-                        if let Err(error) = app.emit(overlay::OVERLAY_CLOSED_EVENT, ()) {
-                            eprintln!("failed to emit overlay closed event: {error}");
+            if window.label() == overlay::OVERLAY_LABEL {
+                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                    println!("overlay: native close requested");
+                    api.prevent_close();
+                    let app = window.app_handle();
+                    if let Some(state) = app.try_state::<AppState>() {
+                        if let Err(error) = overlay::close_overlay(app, &state, "native close") {
+                            eprintln!(
+                                "failed to close overlay after native close request: {error}"
+                            );
                         }
                     }
                 }

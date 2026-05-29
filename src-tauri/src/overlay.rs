@@ -1,6 +1,7 @@
-use crate::{app_error::AppError, settings::OverlaySettings};
+use crate::{app_error::AppError, app_state::AppState, settings::OverlaySettings};
 use tauri::{
-    webview::Color, AppHandle, LogicalSize, Manager, Size, WebviewUrl, WebviewWindowBuilder,
+    webview::Color, AppHandle, Emitter, LogicalSize, Manager, Size, WebviewUrl,
+    WebviewWindowBuilder,
 };
 
 pub const OVERLAY_LABEL: &str = "overlay";
@@ -46,6 +47,28 @@ pub fn destroy_overlay_window(app: &AppHandle, reason: &str) -> Result<bool, App
 
     println!("overlay: destroy requested but no overlay exists ({reason})");
     Ok(false)
+}
+
+pub fn close_overlay(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), AppError> {
+    println!("overlay: close requested ({reason})");
+    state.audio_meter().stop()?;
+
+    let was_open = state.mark_overlay_closed();
+    let destroyed = match destroy_overlay_window(app, reason) {
+        Ok(destroyed) => destroyed,
+        Err(error) => {
+            if was_open {
+                state.mark_overlay_open();
+            }
+            return Err(error);
+        }
+    };
+
+    if was_open || destroyed {
+        app.emit(OVERLAY_CLOSED_EVENT, ())?;
+    }
+
+    Ok(())
 }
 
 pub fn apply_overlay_settings(app: &AppHandle, settings: &OverlaySettings) -> Result<(), AppError> {

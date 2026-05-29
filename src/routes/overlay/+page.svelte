@@ -1,7 +1,6 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
-  import { PhysicalPosition } from "@tauri-apps/api/dpi";
-  import { cursorPosition, getCurrentWindow } from "@tauri-apps/api/window";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import type { AppSettings } from "$lib/domain/settings";
   import {
@@ -16,7 +15,6 @@
     | { status: "error"; message: string };
 
   let overlayState = $state<OverlayState>({ status: "loading" });
-  let isManualDragging = false;
 
   onMount(() => {
     document.documentElement.classList.add("overlay-window");
@@ -52,7 +50,7 @@
     }
   }
 
-  async function startDragging(event: PointerEvent) {
+  async function startDragging(event: MouseEvent) {
     if (event.button !== 0) {
       return;
     }
@@ -63,64 +61,14 @@
       }
     }
 
-    await startManualDragging(event);
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (error) {
+      console.error(commandErrorMessage(error));
+    }
   }
 
-  async function startManualDragging(event: PointerEvent) {
-    if (isManualDragging) {
-      return;
-    }
-
-    event.preventDefault();
-    const dragTarget =
-      event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
-    dragTarget?.setPointerCapture(event.pointerId);
-
-    const appWindow = getCurrentWindow();
-    const originWindow = await appWindow.outerPosition();
-    const originCursor = await cursorPosition();
-    isManualDragging = true;
-
-    async function moveWindow() {
-      if (!isManualDragging) {
-        return;
-      }
-
-      const cursor = await cursorPosition();
-      await appWindow.setPosition(
-        new PhysicalPosition(
-          originWindow.x + cursor.x - originCursor.x,
-          originWindow.y + cursor.y - originCursor.y,
-        ),
-      );
-    }
-
-    function stopDragging() {
-      isManualDragging = false;
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", stopDragging);
-      window.removeEventListener("pointercancel", stopDragging);
-
-      try {
-        dragTarget?.releasePointerCapture(event.pointerId);
-      } catch {
-        // Pointer capture may already be released by the WebView.
-      }
-    }
-
-    function handlePointerMove() {
-      void moveWindow().catch((error) => {
-        console.error(commandErrorMessage(error));
-        stopDragging();
-      });
-    }
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", stopDragging, { once: true });
-    window.addEventListener("pointercancel", stopDragging, { once: true });
-  }
-
-  function stopOverlayControlPointer(event: PointerEvent) {
+  function stopOverlayControlMouse(event: MouseEvent) {
     event.stopPropagation();
   }
 
@@ -129,18 +77,10 @@
     event.stopPropagation();
     console.log("overlay close button clicked");
 
-    const fallbackTimer = window.setTimeout(() => {
-      void destroyOverlay().catch((error) => {
-        console.error(commandErrorMessage(error));
-      });
-    }, 250);
-
     try {
-      await getCurrentWindow().close();
-    } catch (error) {
-      window.clearTimeout(fallbackTimer);
-      console.error(commandErrorMessage(error));
       await destroyOverlay();
+    } catch (error) {
+      console.error(commandErrorMessage(error));
     }
   }
 </script>
@@ -150,6 +90,7 @@
 </svelte:head>
 
 {#if overlayState.status === "ready"}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions - the frameless overlay surface is the drag handle. -->
   <main
     class="overlay-shell"
     aria-live="polite"
@@ -159,7 +100,7 @@
     style:color={overlayState.settings.overlay.textColor}
     style:--caption-background-opacity={overlayState.settings.overlay
       .backgroundOpacity}
-    onpointerdown={startDragging}
+    onmousedown={startDragging}
   >
     <div class="overlay-header">
       <span>FeelSay</span>
@@ -169,7 +110,7 @@
         aria-label="Close overlay"
         title="Close"
         data-overlay-control
-        onpointerdown={stopOverlayControlPointer}
+        onmousedown={stopOverlayControlMouse}
         onclick={closeOverlay}
       >
         x
@@ -178,18 +119,20 @@
     <p class="caption-text">Live captions will appear here.</p>
   </main>
 {:else if overlayState.status === "error"}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions - the frameless overlay surface is the drag handle. -->
   <main
     class="overlay-shell fallback"
     aria-live="polite"
-    onpointerdown={startDragging}
+    onmousedown={startDragging}
   >
     <p class="caption-text">{overlayState.message}</p>
   </main>
 {:else}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions - the frameless overlay surface is the drag handle. -->
   <main
     class="overlay-shell fallback"
     aria-live="polite"
-    onpointerdown={startDragging}
+    onmousedown={startDragging}
   >
     <p class="caption-text">Loading caption overlay</p>
   </main>
