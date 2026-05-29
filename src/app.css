@@ -1,0 +1,84 @@
+:root {
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    BlinkMacSystemFont,
+    "Segoe UI",
+    sans-serif;
+  font-size: 16px;
+  line-height: 1.5;
+  font-weight: 400;
+  color: var(--fgColor-default);
+  background: var(--bgColor-default);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  -webkit-text-size-adjust: 100%;
+
+  --bgColor-default: oklch(14% 0.006 240);
+  --bgColor-muted: oklch(20% 0.008 240);
+  --bgColor-raised: oklch(23% 0.01 240);
+  --bgColor-inset: oklch(17% 0.008 240);
+  --bgColor-accent-muted: oklch(27% 0.055 195);
+  --bgColor-success-muted: oklch(26% 0.055 150);
+  --bgColor-attention-muted: oklch(28% 0.055 80);
+  --fgColor-default: oklch(93% 0.006 245);
+  --fgColor-muted: oklch(72% 0.014 245);
+  --fgColor-subtle: oklch(60% 0.014 245);
+  --fgColor-onEmphasis: oklch(99% 0 0);
+  --fgColor-accent: oklch(78% 0.11 195);
+  --fgColor-success: oklch(74% 0.11 150);
+  --fgColor-attention: oklch(78% 0.12 80);
+  --borderColor-default: oklch(35% 0.02 245);
+  --borderColor-muted: oklch(30% 0.018 245);
+  --borderColor-emphasis: oklch(48% 0.03 245);
+  --borderColor-accent: oklch(62% 0.11 195);
+  --button-primary-bgColor-rest: oklch(56% 0.13 195);
+  --button-primary-bgColor-hover: oklch(62% 0.13 195);
+  --button-secondary-bgColor-hover: oklch(30% 0.02 245);
+  --shadow-soft: 0 18px 56px oklch(0% 0 0 / 0.24);
+  --radius-default: 8px;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+}
+
+body {
+  min-width: 320px;
+}
+
+button {
+  font: inherit;
+}
+
+button:focus-visible {
+  outline: 3px solid oklch(72% 0.12 195 / 0.55);
+  outline-offset: 2px;
+}
+
+html.overlay-window,
+html.overlay-window body {
+  background: transparent;
+  overflow: hidden;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}
