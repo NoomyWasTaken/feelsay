@@ -11,7 +11,7 @@
   import {
     commandErrorMessage,
     getSettings,
-    hideOverlay,
+    destroyOverlay,
     saveSettings,
     showOverlay,
     startAudioMeter,
@@ -195,7 +195,7 @@
 
     try {
       await stopAudioMeter();
-      await hideOverlay();
+      await destroyOverlay();
       captionFlowState = { status: "idle" };
     } catch (error) {
       captionFlowState = {

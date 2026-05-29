@@ -6,8 +6,8 @@
   import type { AppSettings } from "$lib/domain/settings";
   import {
     commandErrorMessage,
+    destroyOverlay,
     getSettings,
-    hideOverlay,
   } from "$lib/tauri/commands";
 
   type OverlayState =
@@ -63,18 +63,18 @@
       }
     }
 
-    void getCurrentWindow()
-      .startDragging()
-      .catch((error) => {
-        console.error(commandErrorMessage(error));
-      });
-    await startManualDragging();
+    await startManualDragging(event);
   }
 
-  async function startManualDragging() {
+  async function startManualDragging(event: PointerEvent) {
     if (isManualDragging) {
       return;
     }
+
+    event.preventDefault();
+    const dragTarget =
+      event.currentTarget instanceof HTMLElement ? event.currentTarget : null;
+    dragTarget?.setPointerCapture(event.pointerId);
 
     const appWindow = getCurrentWindow();
     const originWindow = await appWindow.outerPosition();
@@ -100,6 +100,12 @@
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", stopDragging);
       window.removeEventListener("pointercancel", stopDragging);
+
+      try {
+        dragTarget?.releasePointerCapture(event.pointerId);
+      } catch {
+        // Pointer capture may already be released by the WebView.
+      }
     }
 
     function handlePointerMove() {
@@ -114,11 +120,27 @@
     window.addEventListener("pointercancel", stopDragging, { once: true });
   }
 
-  async function closeOverlay() {
+  function stopOverlayControlPointer(event: PointerEvent) {
+    event.stopPropagation();
+  }
+
+  async function closeOverlay(event: MouseEvent) {
+    event.preventDefault();
+    event.stopPropagation();
+    console.log("overlay close button clicked");
+
+    const fallbackTimer = window.setTimeout(() => {
+      void destroyOverlay().catch((error) => {
+        console.error(commandErrorMessage(error));
+      });
+    }, 250);
+
     try {
-      await hideOverlay();
+      await getCurrentWindow().close();
     } catch (error) {
+      window.clearTimeout(fallbackTimer);
       console.error(commandErrorMessage(error));
+      await destroyOverlay();
     }
   }
 </script>
@@ -131,7 +153,6 @@
   <main
     class="overlay-shell"
     aria-live="polite"
-    data-tauri-drag-region
     style:opacity={overlayState.settings.overlay.opacity}
     style:font-family={overlayState.settings.overlay.fontFamily}
     style:font-size={`${overlayState.settings.overlay.fontSize}px`}
@@ -140,28 +161,26 @@
       .backgroundOpacity}
     onpointerdown={startDragging}
   >
-    <div class="overlay-header" data-tauri-drag-region>
-      <span data-tauri-drag-region>FeelSay</span>
+    <div class="overlay-header">
+      <span>FeelSay</span>
       <button
         class="close-button"
         type="button"
         aria-label="Close overlay"
         title="Close"
         data-overlay-control
+        onpointerdown={stopOverlayControlPointer}
         onclick={closeOverlay}
       >
         x
       </button>
     </div>
-    <p class="caption-text" data-tauri-drag-region>
-      Live captions will appear here.
-    </p>
+    <p class="caption-text">Live captions will appear here.</p>
   </main>
 {:else if overlayState.status === "error"}
   <main
     class="overlay-shell fallback"
     aria-live="polite"
-    data-tauri-drag-region
     onpointerdown={startDragging}
   >
     <p class="caption-text">{overlayState.message}</p>
@@ -170,7 +189,6 @@
   <main
     class="overlay-shell fallback"
     aria-live="polite"
-    data-tauri-drag-region
     onpointerdown={startDragging}
   >
     <p class="caption-text">Loading caption overlay</p>

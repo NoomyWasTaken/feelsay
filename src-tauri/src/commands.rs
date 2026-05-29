@@ -66,25 +66,31 @@ pub fn show_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult
 }
 
 #[tauri::command]
-pub fn hide_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+pub fn destroy_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    println!("overlay destroy command received");
     state.audio_meter().stop()?;
 
     let was_open = state.mark_overlay_closed();
-    let destroyed = match overlay::destroy_overlay_window(&app, "command") {
-        Ok(destroyed) => destroyed,
+    match overlay::destroy_overlay_window(&app, "command") {
+        Ok(_) => {}
         Err(error) => {
             if was_open {
                 state.mark_overlay_open();
             }
             return Err(error.into());
         }
-    };
+    }
 
-    if destroyed || was_open {
+    if was_open {
         app.emit(overlay::OVERLAY_CLOSED_EVENT, ())
             .map_err(crate::app_error::AppError::from)?;
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn hide_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
+    destroy_overlay(app, state)
 }
 
 #[tauri::command]

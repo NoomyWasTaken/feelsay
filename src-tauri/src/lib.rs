@@ -45,6 +45,11 @@ pub fn run() {
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
                     let _ = state.audio_meter().stop();
+                    if state.mark_overlay_closed() {
+                        if let Err(error) = app.emit(overlay::OVERLAY_CLOSED_EVENT, ()) {
+                            eprintln!("failed to emit overlay closed event: {error}");
+                        }
+                    }
                 }
             }
 
@@ -68,6 +73,7 @@ pub fn run() {
             commands::get_settings,
             commands::save_settings,
             commands::show_overlay,
+            commands::destroy_overlay,
             commands::hide_overlay,
             commands::start_audio_meter,
             commands::stop_audio_meter,

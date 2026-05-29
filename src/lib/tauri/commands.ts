@@ -23,8 +23,12 @@ export function showOverlay(): Promise<void> {
   return invoke<void>("show_overlay");
 }
 
+export function destroyOverlay(): Promise<void> {
+  return invoke<void>("destroy_overlay");
+}
+
 export function hideOverlay(): Promise<void> {
-  return invoke<void>("hide_overlay");
+  return destroyOverlay();
 }
 
 export function startAudioMeter(sourceIds: string[]): Promise<void> {
