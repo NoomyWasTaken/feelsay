@@ -1,8 +1,13 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import type { AppSettings } from "$lib/domain/settings";
-  import { commandErrorMessage, getSettings } from "$lib/tauri/commands";
+  import {
+    commandErrorMessage,
+    destroyOverlay,
+    getSettings,
+  } from "$lib/tauri/commands";
 
   type OverlayState =
     | { status: "loading" }
@@ -44,6 +49,33 @@
       };
     }
   }
+
+  async function handleDragStart(event: MouseEvent) {
+    if (event.button !== 0) return;
+    const target = event.target as HTMLElement | null;
+    if (target && target.closest("button, a, input, textarea, select")) {
+      return;
+    }
+    try {
+      await getCurrentWindow().startDragging();
+    } catch (error) {
+      console.error("overlay: startDragging failed", error);
+    }
+  }
+
+  async function handleClose(event: MouseEvent) {
+    event.stopPropagation();
+    try {
+      await getCurrentWindow().destroy();
+    } catch (error) {
+      console.error("overlay: destroy failed, falling back to IPC", error);
+      try {
+        await destroyOverlay();
+      } catch (ipcError) {
+        console.error("overlay: destroyOverlay IPC failed", ipcError);
+      }
+    }
+  }
 </script>
 
 <svelte:head>
@@ -51,10 +83,11 @@
 </svelte:head>
 
 {#if overlayState.status === "ready"}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
   <main
     class="overlay-shell"
     aria-live="polite"
-    data-tauri-drag-region
+    onmousedown={handleDragStart}
     style:opacity={overlayState.settings.overlay.opacity}
     style:font-family={overlayState.settings.overlay.fontFamily}
     style:font-size={`${overlayState.settings.overlay.fontSize}px`}
@@ -63,24 +96,51 @@
       .backgroundOpacity}
   >
     <div class="overlay-header">
-      <span>FeelSay</span>
+      <span class="overlay-title">FeelSay</span>
+      <button
+        class="overlay-close"
+        type="button"
+        aria-label="Close caption overlay"
+        onmousedown={(event) => event.stopPropagation()}
+        onclick={handleClose}
+      >
+        ×
+      </button>
     </div>
     <p class="caption-text">Live captions will appear here.</p>
   </main>
 {:else if overlayState.status === "error"}
-  <main
-    class="overlay-shell fallback"
-    aria-live="polite"
-    data-tauri-drag-region
-  >
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <main class="overlay-shell fallback" onmousedown={handleDragStart}>
+    <div class="overlay-header">
+      <span class="overlay-title">FeelSay</span>
+      <button
+        class="overlay-close"
+        type="button"
+        aria-label="Close caption overlay"
+        onmousedown={(event) => event.stopPropagation()}
+        onclick={handleClose}
+      >
+        ×
+      </button>
+    </div>
     <p class="caption-text">{overlayState.message}</p>
   </main>
 {:else}
-  <main
-    class="overlay-shell fallback"
-    aria-live="polite"
-    data-tauri-drag-region
-  >
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <main class="overlay-shell fallback" onmousedown={handleDragStart}>
+    <div class="overlay-header">
+      <span class="overlay-title">FeelSay</span>
+      <button
+        class="overlay-close"
+        type="button"
+        aria-label="Close caption overlay"
+        onmousedown={(event) => event.stopPropagation()}
+        onclick={handleClose}
+      >
+        ×
+      </button>
+    </div>
     <p class="caption-text">Loading caption overlay</p>
   </main>
 {/if}
@@ -110,10 +170,14 @@
     user-select: none;
   }
 
+  .overlay-shell:active {
+    cursor: grabbing;
+  }
+
   .overlay-header {
     display: flex;
     align-items: center;
-    justify-content: flex-start;
+    justify-content: space-between;
     min-width: 0;
     height: 30px;
     border: 0;
@@ -129,12 +193,32 @@
       sans-serif;
   }
 
-  .overlay-shell:active {
-    cursor: grabbing;
+  .overlay-title {
+    pointer-events: none;
   }
 
-  .overlay-header span {
-    pointer-events: none;
+  .overlay-close {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border: 0;
+    border-radius: 4px;
+    background: transparent;
+    color: oklch(86% 0.008 245);
+    cursor: pointer;
+    font:
+      600 18px/1 Inter,
+      "Segoe UI",
+      system-ui,
+      sans-serif;
+  }
+
+  .overlay-close:hover,
+  .overlay-close:focus-visible {
+    background: oklch(100% 0 0 / 0.12);
+    outline: none;
   }
 
   .caption-text {
@@ -144,11 +228,12 @@
     margin: 0;
     text-align: center;
     text-shadow: 0 2px 12px oklch(0% 0 0 / 0.32);
+    pointer-events: none;
   }
 
   .fallback {
-    grid-template-rows: 1fr;
-    padding: 24px;
+    grid-template-rows: auto 1fr;
+    padding: 0 24px 24px;
     color: #f8fafc;
     font:
       600 24px/1.35 Inter,
