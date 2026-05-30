@@ -1,13 +1,8 @@
 <script lang="ts">
   import { listen } from "@tauri-apps/api/event";
-  import { getCurrentWindow } from "@tauri-apps/api/window";
   import { onMount } from "svelte";
   import type { AppSettings } from "$lib/domain/settings";
-  import {
-    commandErrorMessage,
-    destroyOverlay,
-    getSettings,
-  } from "$lib/tauri/commands";
+  import { commandErrorMessage, getSettings } from "$lib/tauri/commands";
 
   type OverlayState =
     | { status: "loading" }
@@ -49,40 +44,6 @@
       };
     }
   }
-
-  async function startDragging(event: MouseEvent) {
-    if (event.button !== 0) {
-      return;
-    }
-
-    if (event.target instanceof Element) {
-      if (event.target.closest("[data-overlay-control]")) {
-        return;
-      }
-    }
-
-    try {
-      await getCurrentWindow().startDragging();
-    } catch (error) {
-      console.error(commandErrorMessage(error));
-    }
-  }
-
-  function stopOverlayControlMouse(event: MouseEvent) {
-    event.stopPropagation();
-  }
-
-  async function closeOverlay(event: MouseEvent) {
-    event.preventDefault();
-    event.stopPropagation();
-    console.log("overlay close button clicked");
-
-    try {
-      await destroyOverlay();
-    } catch (error) {
-      console.error(commandErrorMessage(error));
-    }
-  }
 </script>
 
 <svelte:head>
@@ -90,49 +51,35 @@
 </svelte:head>
 
 {#if overlayState.status === "ready"}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions - the frameless overlay surface is the drag handle. -->
   <main
     class="overlay-shell"
     aria-live="polite"
+    data-tauri-drag-region
     style:opacity={overlayState.settings.overlay.opacity}
     style:font-family={overlayState.settings.overlay.fontFamily}
     style:font-size={`${overlayState.settings.overlay.fontSize}px`}
     style:color={overlayState.settings.overlay.textColor}
     style:--caption-background-opacity={overlayState.settings.overlay
       .backgroundOpacity}
-    onmousedown={startDragging}
   >
     <div class="overlay-header">
       <span>FeelSay</span>
-      <button
-        class="close-button"
-        type="button"
-        aria-label="Close overlay"
-        title="Close"
-        data-overlay-control
-        onmousedown={stopOverlayControlMouse}
-        onclick={closeOverlay}
-      >
-        x
-      </button>
     </div>
     <p class="caption-text">Live captions will appear here.</p>
   </main>
 {:else if overlayState.status === "error"}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions - the frameless overlay surface is the drag handle. -->
   <main
     class="overlay-shell fallback"
     aria-live="polite"
-    onmousedown={startDragging}
+    data-tauri-drag-region
   >
     <p class="caption-text">{overlayState.message}</p>
   </main>
 {:else}
-  <!-- svelte-ignore a11y_no_noninteractive_element_interactions - the frameless overlay surface is the drag handle. -->
   <main
     class="overlay-shell fallback"
     aria-live="polite"
-    onmousedown={startDragging}
+    data-tauri-drag-region
   >
     <p class="caption-text">Loading caption overlay</p>
   </main>
@@ -166,7 +113,7 @@
   .overlay-header {
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    justify-content: flex-start;
     min-width: 0;
     height: 30px;
     border: 0;
@@ -188,25 +135,6 @@
 
   .overlay-header span {
     pointer-events: none;
-  }
-
-  .close-button {
-    display: grid;
-    width: 26px;
-    height: 26px;
-    place-items: center;
-    border: 0;
-    border-radius: 6px;
-    background: transparent;
-    color: oklch(86% 0.008 245);
-    cursor: pointer;
-    font-size: 18px;
-    line-height: 1;
-  }
-
-  .close-button:hover {
-    background: oklch(100% 0 0 / 0.1);
-    color: oklch(98% 0 0);
   }
 
   .caption-text {

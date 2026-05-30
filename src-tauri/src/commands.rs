@@ -68,7 +68,9 @@ pub fn show_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult
 #[tauri::command]
 pub fn destroy_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     println!("overlay destroy command received");
-    overlay::close_overlay(&app, &state, "command")?;
+    if !overlay::destroy_overlay_window(&app, "command")? {
+        overlay::finish_overlay_close(&app, &state, "command without window")?;
+    }
     Ok(())
 }
 

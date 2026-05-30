@@ -49,22 +49,15 @@ pub fn destroy_overlay_window(app: &AppHandle, reason: &str) -> Result<bool, App
     Ok(false)
 }
 
-pub fn close_overlay(app: &AppHandle, state: &AppState, reason: &str) -> Result<(), AppError> {
-    println!("overlay: close requested ({reason})");
+pub fn finish_overlay_close(
+    app: &AppHandle,
+    state: &AppState,
+    reason: &str,
+) -> Result<(), AppError> {
+    println!("overlay: closed ({reason})");
     state.audio_meter().stop()?;
 
-    let was_open = state.mark_overlay_closed();
-    let destroyed = match destroy_overlay_window(app, reason) {
-        Ok(destroyed) => destroyed,
-        Err(error) => {
-            if was_open {
-                state.mark_overlay_open();
-            }
-            return Err(error);
-        }
-    };
-
-    if was_open || destroyed {
+    if state.mark_overlay_closed() {
         app.emit(OVERLAY_CLOSED_EVENT, ())?;
     }
 

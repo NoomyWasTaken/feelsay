@@ -12,7 +12,7 @@ pub mod translation;
 
 use app_state::AppState;
 use settings::SettingsService;
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -30,25 +30,27 @@ pub fn run() {
                 println!("app: main close requested; cleaning up overlay and audio meter");
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
-                    if let Err(error) = overlay::close_overlay(app, &state, "main window close") {
-                        eprintln!("failed to close overlay during main close: {error}");
+                    let _ = state.audio_meter().stop();
+                    match overlay::destroy_overlay_window(app, "main window close") {
+                        Ok(false) => {
+                            if let Err(error) =
+                                overlay::finish_overlay_close(app, &state, "main window close")
+                            {
+                                eprintln!("failed to finalize overlay during main close: {error}");
+                            }
+                        }
+                        Ok(true) => {}
+                        Err(error) => {
+                            eprintln!("failed to destroy overlay during main close: {error}");
+                        }
                     }
                 }
             }
 
-            if window.label() == overlay::OVERLAY_LABEL {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    println!("overlay: native close requested");
-                    api.prevent_close();
-                    let app = window.app_handle();
-                    if let Some(state) = app.try_state::<AppState>() {
-                        if let Err(error) = overlay::close_overlay(app, &state, "native close") {
-                            eprintln!(
-                                "failed to close overlay after native close request: {error}"
-                            );
-                        }
-                    }
-                }
+            if window.label() == overlay::OVERLAY_LABEL
+                && matches!(event, tauri::WindowEvent::CloseRequested { .. })
+            {
+                println!("overlay: native close requested");
             }
 
             if window.label() == overlay::OVERLAY_LABEL
@@ -57,11 +59,10 @@ pub fn run() {
                 println!("overlay: destroyed");
                 let app = window.app_handle();
                 if let Some(state) = app.try_state::<AppState>() {
-                    let _ = state.audio_meter().stop();
-                    if state.mark_overlay_closed() {
-                        if let Err(error) = app.emit(overlay::OVERLAY_CLOSED_EVENT, ()) {
-                            eprintln!("failed to emit overlay closed event: {error}");
-                        }
+                    if let Err(error) =
+                        overlay::finish_overlay_close(app, &state, "destroyed event")
+                    {
+                        eprintln!("failed to finalize overlay destroyed event: {error}");
                     }
                 }
             }
