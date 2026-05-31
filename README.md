@@ -4,13 +4,15 @@ Lightweight cross-platform desktop foundation for local-first real-time captions
 
 ## Current Scope
 
-PBI-001 creates the app shell only:
+The app currently contains the shell only:
 
 - Tauri 2 desktop app with Rust backend and Svelte/TypeScript frontend
-- Dashboard placeholder for source selection and settings
-- Separate translucent caption overlay placeholder
-- Rust-owned settings persisted locally in SQLite
-- Stub modules for future audio capture, ASR, translation, overlay, transcript, and settings work
+- Minimal dashboard with source selection and Start/Stop controls
+- Rust platform/source scaffolding
+- Mock audio meter scaffolding
+- Stub modules for future audio capture, ASR, translation, and transcript work
+
+The Caption Overlay implementation has been intentionally purged and documented in `docs/caption-overlay.md` so it can be rebuilt from a clean baseline.
 
 No audio capture, ASR, translation, diarization, export, mobile app, or cloud service is implemented yet.
 
@@ -21,7 +23,7 @@ No audio capture, ASR, translation, diarization, export, mobile app, or cloud se
 - Rust/Cargo
 - Tauri desktop prerequisites for your OS
 
-Windows is the first target. macOS and Linux are kept in mind, but the overlay transparency behavior may need platform-specific follow-up.
+Windows is the first target. macOS and Linux are kept in mind.
 
 ## Setup
 
@@ -51,14 +53,10 @@ npm run rust:lint
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-## Local Data
-
-Settings are stored by the Rust core in the app data directory as `feelsay.sqlite3`. The frontend does not write settings directly.
-
-## Manual PBI-001 Test
+## Manual Test
 
 1. Run `npm run tauri dev`.
 2. Confirm the dashboard opens and looks like the Feelsay app, not the Tauri template.
-3. Confirm `Start Captions` is disabled.
-4. Click `Preview Overlay`.
-5. Confirm the overlay opens as a separate translucent, resizable, always-on-top placeholder window.
+3. Confirm `Start` is disabled until a source is selected.
+4. Select a source.
+5. Confirm `Start` and `Stop` update the shell state without creating a Caption Overlay window.

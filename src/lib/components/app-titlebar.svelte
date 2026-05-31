@@ -71,7 +71,8 @@
     display: grid;
     grid-template-columns: 1fr auto;
     height: 34px;
-    background: oklch(12% 0.006 240);
+    border-bottom: 3px solid oklch(35.12% 0.0246 262.79);
+    background: oklch(23.13% 0.012 270.86);
     color: var(--fgColor-default);
     user-select: none;
   }
@@ -97,7 +98,7 @@
     flex: 0 0 auto;
     border-radius: 50%;
     background: var(--button-primary-bgColor-rest);
-    box-shadow: inset 0 0 0 3px oklch(12% 0.006 240);
+    box-shadow: inset 0 0 0 3px oklch(23.13% 0.012 270.86);
   }
 
   .window-controls {
@@ -117,13 +118,18 @@
   }
 
   .window-controls button:hover {
-    background: oklch(100% 0 0 / 0.08);
+    background: oklch(29.25% 0.0196 264.21);
     color: var(--fgColor-default);
   }
 
   .window-controls button.close:hover {
-    background: oklch(58% 0.2 25);
-    color: white;
+    background: oklch(29.25% 0.0196 264.21);
+    color: var(--fgColor-default);
+  }
+
+  .window-controls button:active {
+    background: oklch(68.75% 0.141 250.36);
+    color: oklch(100% 0 89.88);
   }
 
   .control-icon {

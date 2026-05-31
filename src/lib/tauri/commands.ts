@@ -1,34 +1,21 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AudioLevelEvent } from "$lib/domain/audio-meter";
-import type { AppSettings, AppStatus } from "$lib/domain/settings";
 import type {
   AudioSource,
   PlatformCapabilities,
   SourcePreview,
 } from "$lib/domain/source-selection";
 
+export type SessionState = "idle" | "starting" | "listening" | "error";
+
+export type AppStatus = {
+  state: SessionState;
+  message: string;
+  selectedSource: string | null;
+};
+
 export function getAppStatus(): Promise<AppStatus> {
   return invoke<AppStatus>("get_app_status");
-}
-
-export function getSettings(): Promise<AppSettings> {
-  return invoke<AppSettings>("get_settings");
-}
-
-export function saveSettings(settings: AppSettings): Promise<AppSettings> {
-  return invoke<AppSettings>("save_settings", { settings });
-}
-
-export function showOverlay(): Promise<void> {
-  return invoke<void>("show_overlay");
-}
-
-export function destroyOverlay(): Promise<void> {
-  return invoke<void>("destroy_overlay");
-}
-
-export function hideOverlay(): Promise<void> {
-  return destroyOverlay();
 }
 
 export function startAudioMeter(sourceIds: string[]): Promise<void> {
@@ -37,6 +24,18 @@ export function startAudioMeter(sourceIds: string[]): Promise<void> {
 
 export function stopAudioMeter(): Promise<void> {
   return invoke<void>("stop_audio_meter");
+}
+
+export function openCaptionWindow(): Promise<void> {
+  return invoke<void>("open_caption_window");
+}
+
+export function closeCaptionWindow(): Promise<void> {
+  return invoke<void>("close_caption_window");
+}
+
+export function isCaptionWindowOpen(): Promise<boolean> {
+  return invoke<boolean>("is_caption_window_open");
 }
 
 export type { AudioLevelEvent };

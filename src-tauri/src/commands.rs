@@ -1,13 +1,12 @@
 use crate::{
-    app_error::CommandResult,
+    app_error::{AppError, CommandResult},
     app_state::AppState,
-    overlay, platform,
+    platform,
     platform::{PlatformCapabilityProvider, SourceEnumerator, SourcePreviewProvider},
-    settings::AppSettings,
     source::{AudioSource, PlatformCapabilities, SourcePreview},
 };
 use serde::Serialize;
-use tauri::{AppHandle, Emitter, State};
+use tauri::{AppHandle, State};
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -15,7 +14,6 @@ pub struct AppStatus {
     pub state: SessionState,
     pub message: String,
     pub selected_source: Option<String>,
-    pub overlay_available: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -33,50 +31,7 @@ pub fn get_app_status() -> AppStatus {
         state: SessionState::Idle,
         message: "Ready to configure captions.".to_string(),
         selected_source: None,
-        overlay_available: true,
     }
-}
-
-#[tauri::command]
-pub fn get_settings(state: State<'_, AppState>) -> CommandResult<AppSettings> {
-    Ok(state.settings().load()?)
-}
-
-#[tauri::command]
-pub fn save_settings(
-    app: AppHandle,
-    state: State<'_, AppState>,
-    settings: AppSettings,
-) -> CommandResult<AppSettings> {
-    let settings = state.settings().save(settings)?;
-    overlay::apply_overlay_settings(&app, &settings.overlay)?;
-    app.emit("settings-updated", &settings)
-        .map_err(crate::app_error::AppError::from)?;
-    Ok(settings)
-}
-
-#[tauri::command]
-pub fn show_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    let settings = state.settings().load()?;
-    overlay::show_overlay_window(&app, &settings.overlay)?;
-    state.mark_overlay_open();
-    app.emit(overlay::OVERLAY_OPENED_EVENT, ())
-        .map_err(crate::app_error::AppError::from)?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn destroy_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    println!("overlay destroy command received");
-    if !overlay::destroy_overlay_window(&app, "command")? {
-        overlay::finish_overlay_close(&app, &state, "command without window")?;
-    }
-    Ok(())
-}
-
-#[tauri::command]
-pub fn hide_overlay(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
-    destroy_overlay(app, state)
 }
 
 #[tauri::command]
@@ -93,6 +48,29 @@ pub fn start_audio_meter(
 pub fn stop_audio_meter(state: State<'_, AppState>) -> CommandResult<()> {
     state.audio_meter().stop()?;
     Ok(())
+}
+
+#[tauri::command]
+pub fn open_caption_window(state: State<'_, AppState>) -> CommandResult<()> {
+    state
+        .open_caption_process()
+        .map_err(|error| AppError::Window(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn close_caption_window(state: State<'_, AppState>) -> CommandResult<()> {
+    state
+        .close_caption_process()
+        .map_err(|error| AppError::Window(error.to_string()))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn is_caption_window_open(state: State<'_, AppState>) -> CommandResult<bool> {
+    Ok(state
+        .caption_process_is_running()
+        .map_err(|error| AppError::Window(error.to_string()))?)
 }
 
 #[tauri::command]

@@ -1,19 +1,15 @@
 <script lang="ts">
-  import { dev } from "$app/environment";
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import AppTitlebar from "$lib/components/app-titlebar.svelte";
-  import OverlaySettingsPanel from "$lib/components/overlay-settings-panel.svelte";
   import SourcePicker from "$lib/components/source-picker.svelte";
   import type { AudioLevelEvent } from "$lib/domain/audio-meter";
-  import type { AppSettings } from "$lib/domain/settings";
   import type { SourceSelection } from "$lib/domain/source-selection";
   import {
+    closeCaptionWindow,
     commandErrorMessage,
-    getSettings,
-    destroyOverlay,
-    saveSettings,
-    showOverlay,
+    isCaptionWindowOpen,
+    openCaptionWindow,
     startAudioMeter,
     stopAudioMeter,
   } from "$lib/tauri/commands";
@@ -25,13 +21,7 @@
     | { status: "stopping" }
     | { status: "error"; message: string };
 
-  type SettingsState =
-    | { status: "loading" }
-    | { status: "ready"; settings: AppSettings }
-    | { status: "error"; message: string };
-
   let captionFlowState = $state<CaptionFlowState>({ status: "idle" });
-  let settingsState = $state<SettingsState>({ status: "loading" });
   let selectedSource = $state<SourceSelection | null>(null);
   let meterState = $state<AudioLevelEvent>({
     level: 0,
@@ -40,8 +30,8 @@
     isMock: true,
   });
   let isSourcePickerOpen = $state(false);
-  let isSettingsOpen = $state(false);
   let unlistenAudioLevel: UnlistenFn | undefined;
+  let captionWindowPoll: ReturnType<typeof setInterval> | undefined;
 
   let isBusy = $derived(
     captionFlowState.status === "starting" ||
@@ -59,64 +49,17 @@
   let meterLabel = $derived(getMeterLabel(meterState.status));
 
   onMount(() => {
-    void loadSettings();
-    let unlistenOverlayClosed: (() => void) | undefined;
-
     void listen<AudioLevelEvent>("audio-level", (event) => {
       meterState = event.payload;
     }).then((unlisten) => {
       unlistenAudioLevel = unlisten;
     });
 
-    void listen("overlay-closed", () => {
-      if (
-        captionFlowState.status === "captioning" ||
-        captionFlowState.status === "starting" ||
-        captionFlowState.status === "stopping"
-      ) {
-        captionFlowState = { status: "idle" };
-        void stopAudioMeter();
-      }
-    }).then((unlisten) => {
-      unlistenOverlayClosed = unlisten;
-    });
-
-    if (!dev) {
-      return () => {
-        unlistenOverlayClosed?.();
-        cleanupMeter();
-      };
-    }
-
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.ctrlKey && event.shiftKey && event.code === "KeyO") {
-        event.preventDefault();
-        void openOverlayForDevelopment();
-      }
-    };
-
-    window.addEventListener("keydown", handleKeyDown);
-
     return () => {
-      unlistenOverlayClosed?.();
-      window.removeEventListener("keydown", handleKeyDown);
+      stopCaptionWindowPolling();
       cleanupMeter();
     };
   });
-
-  async function loadSettings() {
-    try {
-      settingsState = {
-        status: "ready",
-        settings: await getSettings(),
-      };
-    } catch (error) {
-      settingsState = {
-        status: "error",
-        message: commandErrorMessage(error),
-      };
-    }
-  }
 
   function getPrimaryActionLabel(state: CaptionFlowState): string {
     if (state.status === "captioning") {
@@ -179,7 +122,8 @@
 
     try {
       await startAudioMeter(getSourceIds(selectedSource));
-      await showOverlay();
+      await openCaptionWindow();
+      startCaptionWindowPolling();
       captionFlowState = { status: "captioning" };
     } catch (error) {
       await stopAudioMeter();
@@ -194,8 +138,9 @@
     captionFlowState = { status: "stopping" };
 
     try {
+      await closeCaptionWindow();
+      stopCaptionWindowPolling();
       await stopAudioMeter();
-      await destroyOverlay();
       captionFlowState = { status: "idle" };
     } catch (error) {
       captionFlowState = {
@@ -203,27 +148,6 @@
         message: commandErrorMessage(error),
       };
     }
-  }
-
-  async function openOverlayForDevelopment() {
-    try {
-      await showOverlay();
-    } catch (error) {
-      captionFlowState = {
-        status: "error",
-        message: commandErrorMessage(error),
-      };
-    }
-  }
-
-  async function handleSaveSettings(settings: AppSettings) {
-    const saved = await saveSettings(settings);
-    settingsState = { status: "ready", settings: saved };
-  }
-
-  async function handleTestCaption(settings: AppSettings) {
-    await handleSaveSettings(settings);
-    await showOverlay();
   }
 
   function getSourceIds(selection: SourceSelection): string[] {
@@ -240,6 +164,42 @@
     unlistenAudioLevel?.();
     unlistenAudioLevel = undefined;
     void stopAudioMeter();
+  }
+
+  function startCaptionWindowPolling() {
+    stopCaptionWindowPolling();
+    captionWindowPoll = setInterval(() => {
+      void syncCaptionWindowState();
+    }, 750);
+  }
+
+  function stopCaptionWindowPolling() {
+    if (captionWindowPoll) {
+      clearInterval(captionWindowPoll);
+      captionWindowPoll = undefined;
+    }
+  }
+
+  async function syncCaptionWindowState() {
+    if (captionFlowState.status !== "captioning") {
+      return;
+    }
+
+    try {
+      if (await isCaptionWindowOpen()) {
+        return;
+      }
+
+      stopCaptionWindowPolling();
+      await stopAudioMeter();
+      captionFlowState = { status: "idle" };
+    } catch (error) {
+      stopCaptionWindowPolling();
+      captionFlowState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
   }
 </script>
 
@@ -297,14 +257,6 @@
         {primaryActionLabel}
       </button>
 
-      <button
-        class="settings-action"
-        type="button"
-        onclick={() => (isSettingsOpen = true)}
-      >
-        Settings
-      </button>
-
       {#if statusMessage}
         <p class="error-message" role="alert">{statusMessage}</p>
       {/if}
@@ -316,38 +268,6 @@
         onApply={applySourceSelection}
         onCancel={() => (isSourcePickerOpen = false)}
       />
-    {/if}
-
-    {#if isSettingsOpen}
-      {#if settingsState.status === "ready"}
-        <OverlaySettingsPanel
-          settings={settingsState.settings}
-          onCancel={() => (isSettingsOpen = false)}
-          onSave={handleSaveSettings}
-          onTestCaption={handleTestCaption}
-        />
-      {:else if settingsState.status === "loading"}
-        <div
-          class="settings-error"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Loading settings"
-        >
-          <p>Loading settings</p>
-        </div>
-      {:else if settingsState.status === "error"}
-        <div
-          class="settings-error"
-          role="dialog"
-          aria-modal="true"
-          aria-label="Settings error"
-        >
-          <p>{settingsState.message}</p>
-          <button type="button" onclick={() => (isSettingsOpen = false)}>
-            Close
-          </button>
-        </div>
-      {/if}
     {/if}
   </main>
 </div>
@@ -496,45 +416,10 @@
     opacity: 0.45;
   }
 
-  .settings-action {
-    border: 0;
-    background: transparent;
-    color: var(--fgColor-muted);
-    cursor: pointer;
-    font-size: 0.875rem;
-  }
-
-  .settings-action:hover {
-    color: var(--fgColor-default);
-  }
-
   .error-message {
     max-width: 32ch;
     color: oklch(76% 0.15 25);
     font-size: 0.875rem;
-  }
-
-  .settings-error {
-    position: fixed;
-    inset: 24px;
-    z-index: 10;
-    display: grid;
-    max-width: 420px;
-    place-self: center;
-    gap: 16px;
-    border: 1px solid var(--borderColor-default);
-    border-radius: var(--radius-default);
-    padding: 20px;
-    background: var(--bgColor-raised);
-  }
-
-  .settings-error button {
-    min-height: 38px;
-    border: 1px solid var(--borderColor-default);
-    border-radius: var(--radius-default);
-    background: transparent;
-    color: var(--fgColor-default);
-    cursor: pointer;
   }
 
   @media (max-width: 520px) {

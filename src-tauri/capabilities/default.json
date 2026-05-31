@@ -1,15 +1,13 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Base desktop permissions for the dashboard and overlay windows.",
-  "windows": ["main", "overlay"],
+  "description": "Base desktop permissions for the dashboard window.",
+  "windows": ["main"],
   "permissions": [
     "core:default",
-    "core:window:allow-start-dragging",
     "core:window:allow-minimize",
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
-    "core:window:allow-destroy",
     "core:event:allow-listen",
     "core:event:allow-unlisten"
   ]

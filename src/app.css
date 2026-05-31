@@ -18,27 +18,27 @@
   -moz-osx-font-smoothing: grayscale;
   -webkit-text-size-adjust: 100%;
 
-  --bgColor-default: oklch(14% 0.006 240);
-  --bgColor-muted: oklch(20% 0.008 240);
-  --bgColor-raised: oklch(23% 0.01 240);
-  --bgColor-inset: oklch(17% 0.008 240);
-  --bgColor-accent-muted: oklch(27% 0.055 195);
-  --bgColor-success-muted: oklch(26% 0.055 150);
-  --bgColor-attention-muted: oklch(28% 0.055 80);
-  --fgColor-default: oklch(93% 0.006 245);
-  --fgColor-muted: oklch(72% 0.014 245);
-  --fgColor-subtle: oklch(60% 0.014 245);
-  --fgColor-onEmphasis: oklch(99% 0 0);
-  --fgColor-accent: oklch(78% 0.11 195);
-  --fgColor-success: oklch(74% 0.11 150);
-  --fgColor-attention: oklch(78% 0.12 80);
-  --borderColor-default: oklch(35% 0.02 245);
-  --borderColor-muted: oklch(30% 0.018 245);
-  --borderColor-emphasis: oklch(48% 0.03 245);
-  --borderColor-accent: oklch(62% 0.11 195);
-  --button-primary-bgColor-rest: oklch(56% 0.13 195);
-  --button-primary-bgColor-hover: oklch(62% 0.13 195);
-  --button-secondary-bgColor-hover: oklch(30% 0.02 245);
+  --bgColor-default: oklch(31.3% 0.021 265.91);
+  --bgColor-muted: oklch(35.12% 0.0246 262.79);
+  --bgColor-raised: oklch(29.25% 0.0196 264.21);
+  --bgColor-inset: oklch(23.13% 0.012 270.86);
+  --bgColor-accent-muted: oklch(33.89% 0.0481 201.41);
+  --bgColor-success-muted: oklch(32.87% 0.0479 171.65);
+  --bgColor-attention-muted: oklch(33.95% 0.05 86.81);
+  --fgColor-default: oklch(97.51% 0.0127 244.25);
+  --fgColor-muted: oklch(85.54% 0.02 260.17);
+  --fgColor-subtle: oklch(68.55% 0.0203 265.92);
+  --fgColor-onEmphasis: oklch(100% 0 89.88);
+  --fgColor-accent: oklch(76.94% 0.1429 176.84);
+  --fgColor-success: oklch(78.68% 0.1314 158.63);
+  --fgColor-attention: oklch(88.03% 0.1348 86.06);
+  --borderColor-default: oklch(35.12% 0.0246 262.79);
+  --borderColor-muted: oklch(29.25% 0.0196 264.21);
+  --borderColor-emphasis: oklch(44.05% 0.0288 261.95);
+  --borderColor-accent: oklch(76.94% 0.1429 176.84);
+  --button-primary-bgColor-rest: oklch(76.94% 0.1429 176.84);
+  --button-primary-bgColor-hover: oklch(73.34% 0.1361 176.94);
+  --button-secondary-bgColor-hover: oklch(29.25% 0.0196 264.21);
   --shadow-soft: 0 18px 56px oklch(0% 0 0 / 0.24);
   --radius-default: 8px;
 }
@@ -58,14 +58,8 @@ button {
 }
 
 button:focus-visible {
-  outline: 3px solid oklch(72% 0.12 195 / 0.55);
+  outline: 3px solid oklch(76.94% 0.1429 176.84 / 0.45);
   outline-offset: 2px;
-}
-
-html.overlay-window,
-html.overlay-window body {
-  background: transparent;
-  overflow: hidden;
 }
 
 @media (prefers-color-scheme: dark) {
