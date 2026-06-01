@@ -349,7 +349,8 @@
     display: grid;
     grid-template-rows: auto auto minmax(0, 1fr) auto;
     width: min(860px, 100%);
-    height: min(720px, calc(100vh - 48px));
+    height: fit-content;
+    max-height: min(720px, calc(100vh - 48px));
     overflow: hidden;
     border: 1px solid var(--borderColor-default);
     border-radius: var(--radius-default);
@@ -438,8 +439,9 @@
 
   .application-grid {
     display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(180px, 220px));
     gap: 14px;
+    justify-content: start;
   }
 
   .application-tile,
@@ -476,12 +478,24 @@
   .application-tile {
     display: grid;
     gap: 10px;
+    width: 100%;
     padding: 10px;
+  }
+
+  .application-tile :global(.preview-shell) {
+    max-height: 124px;
   }
 
   .tile-footer {
     display: grid;
     gap: 8px;
+    min-width: 0;
+  }
+
+  .tile-footer span:first-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
 
   .selection-mark {
@@ -582,7 +596,7 @@
 
   @media (max-width: 720px) {
     .application-grid {
-      grid-template-columns: 1fr;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
     }
 
     .tabs,

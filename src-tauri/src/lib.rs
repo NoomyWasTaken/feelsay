@@ -3,6 +3,7 @@ pub mod app_state;
 pub mod asr;
 pub mod audio_capture;
 pub mod commands;
+pub mod overlay_settings;
 pub mod platform;
 pub mod source;
 pub mod transcript;
@@ -15,7 +16,7 @@ use tauri::Manager;
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
-            app.manage(AppState::new());
+            app.manage(AppState::new(app.path().app_data_dir()?));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -27,6 +28,7 @@ pub fn run() {
                 if let Some(state) = app.try_state::<AppState>() {
                     let _ = state.audio_meter().stop();
                     let _ = state.close_caption_process();
+                    let _ = state.stop_overlay_placement();
                 }
             }
         })
@@ -37,6 +39,11 @@ pub fn run() {
             commands::open_caption_window,
             commands::close_caption_window,
             commands::is_caption_window_open,
+            commands::get_overlay_settings,
+            commands::save_overlay_settings,
+            commands::start_overlay_placement,
+            commands::get_overlay_placement,
+            commands::stop_overlay_placement,
             commands::get_platform_capabilities,
             commands::list_available_sources,
             commands::get_source_previews

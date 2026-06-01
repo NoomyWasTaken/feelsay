@@ -2,6 +2,7 @@
   import { listen, type UnlistenFn } from "@tauri-apps/api/event";
   import { onMount } from "svelte";
   import AppTitlebar from "$lib/components/app-titlebar.svelte";
+  import OverlaySettingsPanel from "$lib/components/overlay-settings-panel.svelte";
   import SourcePicker from "$lib/components/source-picker.svelte";
   import type { AudioLevelEvent } from "$lib/domain/audio-meter";
   import type { SourceSelection } from "$lib/domain/source-selection";
@@ -30,6 +31,7 @@
     isMock: true,
   });
   let isSourcePickerOpen = $state(false);
+  let isSettingsOpen = $state(false);
   let unlistenAudioLevel: UnlistenFn | undefined;
   let captionWindowPoll: ReturnType<typeof setInterval> | undefined;
 
@@ -257,6 +259,14 @@
         {primaryActionLabel}
       </button>
 
+      <button
+        class="settings-action"
+        type="button"
+        onclick={() => (isSettingsOpen = true)}
+      >
+        Settings
+      </button>
+
       {#if statusMessage}
         <p class="error-message" role="alert">{statusMessage}</p>
       {/if}
@@ -268,6 +278,10 @@
         onApply={applySourceSelection}
         onCancel={() => (isSourcePickerOpen = false)}
       />
+    {/if}
+
+    {#if isSettingsOpen}
+      <OverlaySettingsPanel onClose={() => (isSettingsOpen = false)} />
     {/if}
   </main>
 </div>
@@ -414,6 +428,18 @@
   .primary-action:disabled {
     cursor: default;
     opacity: 0.45;
+  }
+
+  .settings-action {
+    border: 0;
+    background: transparent;
+    color: var(--fgColor-muted);
+    cursor: pointer;
+    font-size: 0.875rem;
+  }
+
+  .settings-action:hover {
+    color: var(--fgColor-default);
   }
 
   .error-message {

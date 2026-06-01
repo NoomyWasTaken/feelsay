@@ -1,6 +1,7 @@
 use crate::{
     app_error::{AppError, CommandResult},
     app_state::AppState,
+    overlay_settings::{OverlayPlacement, OverlaySettings},
     platform,
     platform::{PlatformCapabilityProvider, SourceEnumerator, SourcePreviewProvider},
     source::{AudioSource, PlatformCapabilities, SourcePreview},
@@ -52,9 +53,7 @@ pub fn stop_audio_meter(state: State<'_, AppState>) -> CommandResult<()> {
 
 #[tauri::command]
 pub fn open_caption_window(state: State<'_, AppState>) -> CommandResult<()> {
-    state
-        .open_caption_process()
-        .map_err(|error| AppError::Window(error.to_string()))?;
+    state.open_caption_process()?;
     Ok(())
 }
 
@@ -71,6 +70,42 @@ pub fn is_caption_window_open(state: State<'_, AppState>) -> CommandResult<bool>
     Ok(state
         .caption_process_is_running()
         .map_err(|error| AppError::Window(error.to_string()))?)
+}
+
+#[tauri::command]
+pub fn get_overlay_settings(state: State<'_, AppState>) -> CommandResult<OverlaySettings> {
+    Ok(state.overlay_settings().load()?)
+}
+
+#[tauri::command]
+pub fn save_overlay_settings(
+    state: State<'_, AppState>,
+    settings: OverlaySettings,
+) -> CommandResult<OverlaySettings> {
+    Ok(state.overlay_settings().save(settings)?)
+}
+
+#[tauri::command]
+pub fn start_overlay_placement(
+    state: State<'_, AppState>,
+    settings: OverlaySettings,
+) -> CommandResult<OverlayPlacement> {
+    Ok(state.start_overlay_placement(settings)?)
+}
+
+#[tauri::command]
+pub fn get_overlay_placement(
+    state: State<'_, AppState>,
+) -> CommandResult<Option<OverlayPlacement>> {
+    Ok(state.get_overlay_placement()?)
+}
+
+#[tauri::command]
+pub fn stop_overlay_placement(state: State<'_, AppState>) -> CommandResult<()> {
+    state
+        .stop_overlay_placement()
+        .map_err(|error| AppError::Window(error.to_string()))?;
+    Ok(())
 }
 
 #[tauri::command]

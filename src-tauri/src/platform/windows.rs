@@ -17,7 +17,7 @@ use windows::{
     core::{BOOL, PWSTR},
     Win32::{
         Devices::FunctionDiscovery::PKEY_Device_FriendlyName,
-        Foundation::{CloseHandle, HWND, LPARAM, RPC_E_CHANGED_MODE},
+        Foundation::{CloseHandle, HWND, LPARAM, RECT, RPC_E_CHANGED_MODE},
         Graphics::Dwm::{DwmGetWindowAttribute, DWMWA_CLOAKED},
         Media::Audio::{
             eCapture, eConsole, eRender, EDataFlow, IMMDevice, IMMDeviceEnumerator,
@@ -36,8 +36,9 @@ use windows::{
             Variant::VT_LPWSTR,
         },
         UI::WindowsAndMessaging::{
-            EnumWindows, GetClassNameW, GetShellWindow, GetWindowTextLengthW, GetWindowTextW,
-            GetWindowThreadProcessId, IsIconic, IsWindowVisible,
+            EnumWindows, GetClassNameW, GetShellWindow, GetWindowLongPtrW, GetWindowRect,
+            GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId, IsIconic,
+            IsWindowVisible, GWL_EXSTYLE, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
         },
     },
 };
@@ -107,11 +108,17 @@ fn enumerate_windows() -> Vec<AudioSource> {
     }
 
     let mut seen = HashSet::new();
-    windows
+    let mut sources = windows
         .into_iter()
         .filter(|window| seen.insert((window.process_id, window.title.to_lowercase())))
         .map(window_source)
-        .collect()
+        .collect::<Vec<_>>();
+    sources.sort_by(|left, right| {
+        source_sort_key(left)
+            .to_lowercase()
+            .cmp(&source_sort_key(right).to_lowercase())
+    });
+    sources
 }
 
 #[cfg(target_os = "windows")]
@@ -128,8 +135,16 @@ unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
 #[cfg(target_os = "windows")]
 fn visible_window(hwnd: HWND) -> Option<WindowSource> {
     unsafe {
-        if hwnd == GetShellWindow() || !IsWindowVisible(hwnd).as_bool() || IsIconic(hwnd).as_bool()
-        {
+        if hwnd == GetShellWindow() || !IsWindowVisible(hwnd).as_bool() {
+            return None;
+        }
+
+        if has_ignored_extended_style(hwnd) {
+            return None;
+        }
+
+        let is_minimized = IsIconic(hwnd).as_bool();
+        if !is_minimized && is_useless_window_rect(window_rect(hwnd)?) {
             return None;
         }
 
@@ -164,6 +179,38 @@ fn visible_window(hwnd: HWND) -> Option<WindowSource> {
             process_path,
         })
     }
+}
+
+#[cfg(target_os = "windows")]
+fn source_sort_key(source: &AudioSource) -> String {
+    source
+        .metadata
+        .as_ref()
+        .and_then(|metadata| metadata.app_name.as_deref())
+        .unwrap_or(&source.display_name)
+        .to_string()
+}
+
+#[cfg(target_os = "windows")]
+fn has_ignored_extended_style(hwnd: HWND) -> bool {
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 };
+    style & (WS_EX_TOOLWINDOW.0 | WS_EX_NOACTIVATE.0) != 0
+}
+
+#[cfg(target_os = "windows")]
+fn window_rect(hwnd: HWND) -> Option<RECT> {
+    unsafe {
+        let mut rect = RECT::default();
+        GetWindowRect(hwnd, &mut rect).ok()?;
+        Some(rect)
+    }
+}
+
+#[cfg(target_os = "windows")]
+fn is_useless_window_rect(rect: RECT) -> bool {
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    width < 120 || height < 80 || rect.right <= -32_000 || rect.bottom <= -32_000
 }
 
 #[cfg(target_os = "windows")]
@@ -441,7 +488,10 @@ fn is_useless_title(title: &str) -> bool {
     title.is_empty()
         || matches!(
             title.as_str(),
-            "program manager" | "windows input experience" | "desktopwindowxamlsource"
+            "ashotplugctrl"
+                | "program manager"
+                | "windows input experience"
+                | "desktopwindowxamlsource"
         )
 }
 
@@ -449,7 +499,8 @@ fn is_useless_title(title: &str) -> bool {
 fn is_useless_window_class(class_name: &str) -> bool {
     matches!(
         class_name,
-        "Progman"
+        "ASHOTPLUGCTRL"
+            | "Progman"
             | "WorkerW"
             | "Shell_TrayWnd"
             | "Shell_SecondaryTrayWnd"

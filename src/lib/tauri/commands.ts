@@ -1,6 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AudioLevelEvent } from "$lib/domain/audio-meter";
 import type {
+  OverlayPlacement,
+  OverlaySettings,
+} from "$lib/domain/overlay-settings";
+import type {
   AudioSource,
   PlatformCapabilities,
   SourcePreview,
@@ -36,6 +40,30 @@ export function closeCaptionWindow(): Promise<void> {
 
 export function isCaptionWindowOpen(): Promise<boolean> {
   return invoke<boolean>("is_caption_window_open");
+}
+
+export function getOverlaySettings(): Promise<OverlaySettings> {
+  return invoke<OverlaySettings>("get_overlay_settings");
+}
+
+export function saveOverlaySettings(
+  settings: OverlaySettings,
+): Promise<OverlaySettings> {
+  return invoke<OverlaySettings>("save_overlay_settings", { settings });
+}
+
+export function startOverlayPlacement(
+  settings: OverlaySettings,
+): Promise<OverlayPlacement> {
+  return invoke<OverlayPlacement>("start_overlay_placement", { settings });
+}
+
+export function getOverlayPlacement(): Promise<OverlayPlacement | null> {
+  return invoke<OverlayPlacement | null>("get_overlay_placement");
+}
+
+export function stopOverlayPlacement(): Promise<void> {
+  return invoke<void>("stop_overlay_placement");
 }
 
 export type { AudioLevelEvent };
