@@ -6,12 +6,14 @@ fn main() {
         let settings = overlay_settings_from_env();
         let placement_file =
             std::env::var_os("FEELSAY_OVERLAY_PLACEMENT_FILE").map(std::path::PathBuf::from);
-        run_caption_window_child(settings, placement_file);
+        run_caption_window_child(settings, placement_file, None);
         return;
     }
 
     if std::env::args().any(|arg| arg == "--caption-window-child") {
-        run_caption_window_child(overlay_settings_from_env(), None);
+        let settings_file =
+            std::env::var_os("FEELSAY_OVERLAY_SETTINGS_FILE").map(std::path::PathBuf::from);
+        run_caption_window_child(overlay_settings_from_env(), None, settings_file);
         return;
     }
 
@@ -32,10 +34,14 @@ fn overlay_settings_from_env() -> feelsay_lib::overlay_settings::OverlaySettings
 fn run_caption_window_child(
     settings: feelsay_lib::overlay_settings::OverlaySettings,
     placement_file: Option<std::path::PathBuf>,
+    settings_file: Option<std::path::PathBuf>,
 ) {
     use core::ffi::c_void;
     use feelsay_lib::overlay_settings::{hex_to_rgb, OverlayPlacement, OverlaySettings};
-    use std::cell::Cell;
+    use std::{
+        cell::{Cell, RefCell},
+        time::SystemTime,
+    };
     use windows::{
         core::{w, PCWSTR},
         Win32::{
@@ -51,15 +57,16 @@ fn run_caption_window_child(
             },
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
-                GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, PostQuitMessage,
-                RegisterClassW, SetWindowLongPtrW, SetWindowPos, TranslateMessage,
-                UpdateLayeredWindow, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA, HTBOTTOM,
-                HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT, HTRIGHT, HTTOP,
-                HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, MSG, SWP_NOMOVE, SWP_NOSIZE, ULW_ALPHA,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE, WM_DESTROY, WM_ERASEBKGND,
-                WM_EXITSIZEMOVE, WM_LBUTTONUP, WM_MOVE, WM_MOVING, WM_NCCALCSIZE, WM_NCHITTEST,
-                WM_PAINT, WM_SIZE, WNDCLASSW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST,
-                WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
+                GetCursorPos, GetMessageW, GetWindowLongPtrW, GetWindowRect, KillTimer,
+                PostQuitMessage, RegisterClassW, SetTimer, SetWindowLongPtrW, SetWindowPos,
+                TranslateMessage, UpdateLayeredWindow, CREATESTRUCTW, CW_USEDEFAULT, GWLP_USERDATA,
+                GWL_EXSTYLE, HTBOTTOM, HTBOTTOMLEFT, HTBOTTOMRIGHT, HTCAPTION, HTCLIENT, HTLEFT,
+                HTRIGHT, HTTOP, HTTOPLEFT, HTTOPRIGHT, HWND_TOPMOST, MSG, SWP_NOACTIVATE,
+                SWP_NOMOVE, SWP_NOSIZE, ULW_ALPHA, WINDOW_EX_STYLE, WINDOW_STYLE, WM_CREATE,
+                WM_DESTROY, WM_ERASEBKGND, WM_EXITSIZEMOVE, WM_LBUTTONUP, WM_MOVE, WM_MOVING,
+                WM_NCCALCSIZE, WM_NCHITTEST, WM_PAINT, WM_SIZE, WM_TIMER, WNDCLASSW,
+                WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_MAXIMIZEBOX,
+                WS_MINIMIZEBOX, WS_POPUP, WS_SYSMENU, WS_THICKFRAME, WS_VISIBLE,
             },
         },
     };
@@ -70,10 +77,14 @@ fn run_caption_window_child(
     const CENTER_SNAP_RELEASE_THRESHOLD: i32 = 22;
     const SET_BUTTON_SIZE: i32 = 30;
     const SET_BUTTON_MARGIN: i32 = 12;
+    const SETTINGS_TIMER_ID: usize = 1;
+    const SETTINGS_TIMER_MS: u32 = 100;
 
     struct CaptionWindowState {
-        settings: OverlaySettings,
+        settings: RefCell<OverlaySettings>,
         placement_file: Option<std::path::PathBuf>,
+        settings_file: Option<std::path::PathBuf>,
+        settings_modified: Cell<Option<SystemTime>>,
         snap_x_cursor: Cell<Option<i32>>,
         snap_y_cursor: Cell<Option<i32>>,
         snap_x_suppressed: Cell<bool>,
@@ -92,6 +103,9 @@ fn run_caption_window_child(
                 let state = unsafe { (*create_struct).lpCreateParams as *mut CaptionWindowState };
                 unsafe {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, state as isize);
+                    if (*state).settings_file.is_some() {
+                        let _ = SetTimer(Some(hwnd), SETTINGS_TIMER_ID, SETTINGS_TIMER_MS, None);
+                    }
                 }
                 LRESULT(0)
             }
@@ -124,6 +138,16 @@ fn run_caption_window_child(
                 }
                 LRESULT(0)
             }
+            WM_TIMER => {
+                if wparam.0 == SETTINGS_TIMER_ID {
+                    unsafe {
+                        reload_settings_if_changed(hwnd);
+                    }
+                    return LRESULT(0);
+                }
+
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
             WM_LBUTTONUP => unsafe { handle_click(hwnd, lparam) },
             WM_PAINT => {
                 unsafe {
@@ -136,6 +160,7 @@ fn run_caption_window_child(
             }
             WM_DESTROY => {
                 unsafe {
+                    let _ = KillTimer(Some(hwnd), SETTINGS_TIMER_ID);
                     let state = SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     if state != 0 {
                         drop(Box::from_raw(state as *mut CaptionWindowState));
@@ -214,7 +239,7 @@ fn run_caption_window_child(
         let Some(state) = caption_state(hwnd) else {
             return;
         };
-        let settings = &state.settings;
+        let settings = state.settings.borrow();
 
         let mut rect = RECT::default();
         if GetClientRect(hwnd, &mut rect).is_err() {
@@ -343,6 +368,91 @@ fn run_caption_window_child(
     unsafe fn caption_state(hwnd: HWND) -> Option<&'static CaptionWindowState> {
         let pointer = GetWindowLongPtrW(hwnd, GWLP_USERDATA) as *const CaptionWindowState;
         pointer.as_ref()
+    }
+
+    unsafe fn reload_settings_if_changed(hwnd: HWND) {
+        let Some(state) = caption_state(hwnd) else {
+            return;
+        };
+        let Some(path) = state.settings_file.as_ref() else {
+            return;
+        };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return;
+        };
+        let Ok(modified) = metadata.modified() else {
+            return;
+        };
+
+        if state.settings_modified.get() == Some(modified) {
+            return;
+        }
+
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(settings) = serde_json::from_str::<OverlaySettings>(&content) else {
+            return;
+        };
+
+        state.settings.replace(settings.normalized());
+        state.settings_modified.set(Some(modified));
+        apply_window_settings(hwnd);
+        render_caption(hwnd);
+    }
+
+    unsafe fn apply_window_settings(hwnd: HWND) {
+        let Some(state) = caption_state(hwnd) else {
+            return;
+        };
+        let settings = state.settings.borrow();
+
+        set_click_through(
+            hwnd,
+            state.placement_file.is_none() && settings.click_through,
+        );
+
+        let mut rect = RECT::default();
+        if GetWindowRect(hwnd, &mut rect).is_err() {
+            return;
+        }
+
+        let x = settings.start_x.unwrap_or(rect.left);
+        let y = settings.start_y.unwrap_or(rect.top);
+        let _ = SetWindowPos(
+            hwnd,
+            Some(HWND_TOPMOST),
+            x,
+            y,
+            settings.start_width as i32,
+            settings.start_height as i32,
+            SWP_NOACTIVATE,
+        );
+    }
+
+    unsafe fn set_click_through(hwnd: HWND, enabled: bool) {
+        let current_style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+        let transparent_style = WS_EX_TRANSPARENT.0 as isize;
+        let next_style = if enabled {
+            current_style | transparent_style
+        } else {
+            current_style & !transparent_style
+        };
+
+        if next_style == current_style {
+            return;
+        }
+
+        SetWindowLongPtrW(hwnd, GWL_EXSTYLE, next_style);
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            0,
+            0,
+            0,
+            0,
+            SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+        );
     }
 
     unsafe fn is_placement_mode(hwnd: HWND) -> bool {
@@ -600,9 +710,15 @@ fn run_caption_window_child(
         let y = settings.start_y.unwrap_or(CW_USEDEFAULT);
         let width = settings.start_width as i32;
         let height = settings.start_height as i32;
+        let settings_modified = settings_file
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .and_then(|metadata| metadata.modified().ok());
         let state = Box::into_raw(Box::new(CaptionWindowState {
-            settings,
+            settings: RefCell::new(settings),
             placement_file,
+            settings_file,
+            settings_modified: Cell::new(settings_modified),
             snap_x_cursor: Cell::new(None),
             snap_y_cursor: Cell::new(None),
             snap_x_suppressed: Cell::new(false),
@@ -631,6 +747,7 @@ fn run_caption_window_child(
             Some(state.cast::<c_void>()),
         )
         .map(|hwnd| {
+            apply_window_settings(hwnd);
             render_caption(hwnd);
             write_placement(hwnd, false);
             let _ = SetWindowPos(
@@ -661,6 +778,7 @@ fn run_caption_window_child(
 fn run_caption_window_child(
     _settings: feelsay_lib::overlay_settings::OverlaySettings,
     _placement_file: Option<std::path::PathBuf>,
+    _settings_file: Option<std::path::PathBuf>,
 ) {
     eprintln!("caption window child process is Windows-only for now");
 }

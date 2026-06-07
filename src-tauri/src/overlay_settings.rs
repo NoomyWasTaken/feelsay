@@ -3,42 +3,224 @@ use serde::{Deserialize, Serialize};
 use std::{fs, path::PathBuf};
 
 const FILE_NAME: &str = "overlay-settings.json";
+const RUNTIME_FILE_NAME: &str = "overlay-settings-runtime.json";
+const PROFILE_COUNT: usize = 5;
 
 #[derive(Debug, Clone)]
 pub struct OverlaySettingsService {
     path: PathBuf,
+    runtime_path: PathBuf,
 }
 
 impl OverlaySettingsService {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             path: data_dir.join(FILE_NAME),
+            runtime_path: data_dir.join(RUNTIME_FILE_NAME),
         }
     }
 
     pub fn load(&self) -> Result<OverlaySettings, AppError> {
-        if !self.path.exists() {
-            return Ok(OverlaySettings::default());
-        }
-
-        let content = fs::read_to_string(&self.path)?;
-        let settings = serde_json::from_str::<OverlaySettings>(&content)
-            .map_err(|error| AppError::Io(error.to_string()))?;
-        Ok(settings.normalized())
+        Ok(self.load_store()?.active_settings().clone())
     }
 
     pub fn save(&self, settings: OverlaySettings) -> Result<OverlaySettings, AppError> {
-        let settings = settings.normalized();
+        let mut store = self.load_store()?;
+        store.set_active_settings(settings);
+        let store = self.save_store(store)?;
+        Ok(store.active_settings().clone())
+    }
+
+    pub fn load_store(&self) -> Result<OverlaySettingsStore, AppError> {
+        if !self.path.exists() {
+            return Ok(OverlaySettingsStore::default());
+        }
+
+        let content = fs::read_to_string(&self.path)?;
+
+        if let Ok(store) = serde_json::from_str::<OverlaySettingsStore>(&content) {
+            return Ok(store.normalized());
+        }
+
+        let settings = serde_json::from_str::<OverlaySettings>(&content)
+            .map_err(|error| AppError::Io(error.to_string()))?;
+
+        Ok(OverlaySettingsStore::from_legacy_settings(settings))
+    }
+
+    pub fn save_store(
+        &self,
+        store: OverlaySettingsStore,
+    ) -> Result<OverlaySettingsStore, AppError> {
+        let store = store.normalized();
 
         if let Some(parent) = self.path.parent() {
             fs::create_dir_all(parent)?;
         }
 
-        let content = serde_json::to_string_pretty(&settings)
+        let content = serde_json::to_string_pretty(&store)
             .map_err(|error| AppError::Io(error.to_string()))?;
         fs::write(&self.path, content)?;
+        self.write_runtime_settings(store.active_settings())?;
 
-        Ok(settings)
+        Ok(store)
+    }
+
+    pub fn select_profile(
+        &self,
+        profile_id: OverlayProfileId,
+    ) -> Result<OverlaySettingsStore, AppError> {
+        let mut store = self.load_store()?;
+        store.active_profile_id = profile_id;
+        self.save_store(store)
+    }
+
+    pub fn runtime_settings_path(&self) -> &std::path::Path {
+        &self.runtime_path
+    }
+
+    pub fn write_runtime_settings(&self, settings: &OverlaySettings) -> Result<(), AppError> {
+        if let Some(parent) = self.runtime_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+
+        let content = serde_json::to_string_pretty(&settings.clone().normalized())
+            .map_err(|error| AppError::Io(error.to_string()))?;
+        fs::write(&self.runtime_path, content)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlaySettingsStore {
+    pub active_profile_id: OverlayProfileId,
+    pub profiles: Vec<OverlaySettingsProfile>,
+}
+
+impl OverlaySettingsStore {
+    pub fn active_settings(&self) -> &OverlaySettings {
+        self.profiles
+            .iter()
+            .find(|profile| profile.id == self.active_profile_id)
+            .map(|profile| &profile.settings)
+            .unwrap_or(&self.profiles[0].settings)
+    }
+
+    pub fn set_active_settings(&mut self, settings: OverlaySettings) {
+        let active_profile_id = self.active_profile_id;
+
+        if let Some(profile) = self
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == active_profile_id)
+        {
+            profile.settings = settings;
+        }
+    }
+
+    fn from_legacy_settings(settings: OverlaySettings) -> Self {
+        let mut store = Self::default();
+
+        if let Some(profile) = store
+            .profiles
+            .iter_mut()
+            .find(|profile| profile.id == OverlayProfileId::Profile1)
+        {
+            profile.settings = settings;
+        }
+
+        store.normalized()
+    }
+
+    fn normalized(mut self) -> Self {
+        let defaults = Self::default();
+        let mut profiles = Vec::with_capacity(PROFILE_COUNT);
+
+        for default_profile in defaults.profiles {
+            let mut profile = self
+                .profiles
+                .iter()
+                .find(|profile| profile.id == default_profile.id)
+                .cloned()
+                .unwrap_or_else(|| default_profile.clone());
+
+            profile.name = normalize_profile_name(&profile.name, &default_profile.name);
+            profile.settings = profile.settings.normalized();
+            profiles.push(profile);
+        }
+
+        self.profiles = profiles;
+
+        if !self
+            .profiles
+            .iter()
+            .any(|profile| profile.id == self.active_profile_id)
+        {
+            self.active_profile_id = OverlayProfileId::Profile1;
+        }
+
+        self
+    }
+}
+
+impl Default for OverlaySettingsStore {
+    fn default() -> Self {
+        Self {
+            active_profile_id: OverlayProfileId::Profile1,
+            profiles: OverlayProfileId::all()
+                .iter()
+                .map(|id| OverlaySettingsProfile {
+                    id: *id,
+                    name: id.default_name().to_string(),
+                    settings: OverlaySettings::default(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OverlaySettingsProfile {
+    pub id: OverlayProfileId,
+    pub name: String,
+    pub settings: OverlaySettings,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OverlayProfileId {
+    #[serde(rename = "profile1")]
+    Profile1,
+    #[serde(rename = "profile2")]
+    Profile2,
+    #[serde(rename = "profile3")]
+    Profile3,
+    #[serde(rename = "profile4")]
+    Profile4,
+    #[serde(rename = "profile5")]
+    Profile5,
+}
+
+impl OverlayProfileId {
+    pub fn all() -> [Self; PROFILE_COUNT] {
+        [
+            Self::Profile1,
+            Self::Profile2,
+            Self::Profile3,
+            Self::Profile4,
+            Self::Profile5,
+        ]
+    }
+
+    fn default_name(self) -> &'static str {
+        match self {
+            Self::Profile1 => "Profile 1",
+            Self::Profile2 => "Profile 2",
+            Self::Profile3 => "Profile 3",
+            Self::Profile4 => "Profile 4",
+            Self::Profile5 => "Profile 5",
+        }
     }
 }
 
@@ -57,6 +239,8 @@ pub struct OverlaySettings {
     pub start_height: u32,
     pub start_x: Option<i32>,
     pub start_y: Option<i32>,
+    #[serde(default)]
+    pub click_through: bool,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
@@ -96,6 +280,7 @@ impl Default for OverlaySettings {
             start_height: 180,
             start_x: None,
             start_y: None,
+            click_through: false,
         }
     }
 }
@@ -142,6 +327,16 @@ pub fn hex_to_rgb(color: &str) -> (u8, u8, u8) {
     let green = u8::from_str_radix(&value[2..4], 16).unwrap_or(255);
     let blue = u8::from_str_radix(&value[4..6], 16).unwrap_or(255);
     (red, green, blue)
+}
+
+fn normalize_profile_name(value: &str, fallback: &str) -> String {
+    let trimmed = value.trim();
+
+    if trimmed.is_empty() || trimmed.len() > 32 {
+        fallback.to_string()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn normalize_font_family(value: &str, fallback: &str) -> String {

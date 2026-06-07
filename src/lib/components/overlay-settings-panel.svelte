@@ -1,19 +1,23 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
   import type {
+    OverlayProfileId,
     OverlayPlacement,
     OverlaySettings,
+    OverlaySettingsProfile,
+    OverlaySettingsStore,
   } from "$lib/domain/overlay-settings";
   import {
     colorPickerValue,
+    hasValidOverlaySettingsColors,
     normalizeCssColor,
     rgbaPreviewColor,
   } from "$lib/domain/overlay-settings";
   import {
     commandErrorMessage,
     getOverlayPlacement,
-    getOverlaySettings,
-    saveOverlaySettings,
+    getOverlaySettingsStore,
+    saveOverlaySettingsStore,
     startOverlayPlacement,
     stopOverlayPlacement,
   } from "$lib/tauri/commands";
@@ -25,6 +29,10 @@
   type SettingsState =
     | { status: "loading" }
     | { status: "ready" }
+    | { status: "error"; message: string };
+
+  type SaveState =
+    | { status: "saved" }
     | { status: "saving" }
     | { status: "error"; message: string };
 
@@ -43,24 +51,60 @@
 
   let { onClose }: Props = $props();
   let settingsState = $state<SettingsState>({ status: "loading" });
-  let draft = $state<OverlaySettings | null>(null);
+  let settingsStore = $state<OverlaySettingsStore | null>(null);
+  let saveState = $state<SaveState>({ status: "saved" });
   let placement = $state<OverlayPlacement | null>(null);
   let placementOrigin = $state<OverlayPlacement | null>(null);
   let placementState = $state<"idle" | "starting" | "active" | "error">("idle");
   let placementMessage = $state("");
   let placementPoll: ReturnType<typeof setInterval> | undefined;
+  let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastSavedStoreJson = "";
+  let saveRequestId = 0;
 
   onMount(() => {
     void loadSettings();
   });
 
   onDestroy(() => {
+    stopAutosaveTimer();
     void stopPlacement();
+  });
+
+  $effect(() => {
+    const store = settingsStore;
+
+    if (!store || settingsState.status !== "ready") {
+      return;
+    }
+
+    const serializedStore = serializeStore(store);
+
+    if (serializedStore === lastSavedStoreJson) {
+      return;
+    }
+
+    if (!storeHasValidColors(store)) {
+      stopAutosaveTimer();
+      saveRequestId += 1;
+      saveState = { status: "error", message: "Check colors" };
+      return;
+    }
+
+    saveState = { status: "saving" };
+    stopAutosaveTimer();
+
+    const requestId = ++saveRequestId;
+    autosaveTimer = setTimeout(() => {
+      void autosaveSettings(store, requestId);
+    }, 200);
   });
 
   async function loadSettings() {
     try {
-      draft = await getOverlaySettings();
+      settingsStore = await getOverlaySettingsStore();
+      lastSavedStoreJson = serializeStore(settingsStore);
+      saveState = { status: "saved" };
       settingsState = { status: "ready" };
     } catch (error) {
       settingsState = {
@@ -70,36 +114,105 @@
     }
   }
 
-  async function saveSettings() {
-    if (!draft) {
-      return;
-    }
-
-    settingsState = { status: "saving" };
-
+  async function autosaveSettings(
+    storeSnapshot: OverlaySettingsStore,
+    requestId: number,
+  ) {
     try {
-      draft = await saveOverlaySettings(draft);
-      await stopPlacement();
-      onClose();
+      const savedStore = await saveOverlaySettingsStore(storeSnapshot);
+
+      if (requestId !== saveRequestId) {
+        return;
+      }
+
+      lastSavedStoreJson = serializeStore(savedStore);
+      settingsStore = savedStore;
+      saveState = { status: "saved" };
     } catch (error) {
-      settingsState = {
+      if (requestId !== saveRequestId) {
+        return;
+      }
+
+      saveState = {
         status: "error",
         message: commandErrorMessage(error),
       };
     }
   }
 
+  function stopAutosaveTimer() {
+    if (autosaveTimer) {
+      clearTimeout(autosaveTimer);
+      autosaveTimer = undefined;
+    }
+  }
+
+  function serializeStore(store: OverlaySettingsStore): string {
+    return JSON.stringify(store);
+  }
+
+  function storeHasValidColors(store: OverlaySettingsStore): boolean {
+    return store.profiles.every((profile) =>
+      hasValidOverlaySettingsColors(profile.settings),
+    );
+  }
+
+  function getActiveProfile(
+    store: OverlaySettingsStore,
+  ): OverlaySettingsProfile {
+    return (
+      store.profiles.find((profile) => profile.id === store.activeProfileId) ??
+      store.profiles[0]
+    );
+  }
+
+  function getActiveSettings(): OverlaySettings | null {
+    if (!settingsStore) {
+      return null;
+    }
+
+    return getActiveProfile(settingsStore).settings;
+  }
+
+  function selectProfile(profileId: OverlayProfileId) {
+    if (!settingsStore) {
+      return;
+    }
+
+    settingsStore = {
+      ...settingsStore,
+      activeProfileId: profileId,
+    };
+  }
+
+  function updateProfileName(name: string) {
+    const store = settingsStore;
+
+    if (!store) {
+      return;
+    }
+
+    settingsStore = {
+      ...store,
+      profiles: store.profiles.map((profile) =>
+        profile.id === store.activeProfileId ? { ...profile, name } : profile,
+      ),
+    };
+  }
+
   async function beginPlacement() {
-    if (!draft) {
+    const settings = getActiveSettings();
+
+    if (!settings) {
       return;
     }
 
     placementState = "starting";
     placementMessage = "";
-    placementOrigin = draftPlacement(draft);
+    placementOrigin = draftPlacement(settings);
 
     try {
-      applyPlacement(await startOverlayPlacement(draft));
+      applyPlacement(await startOverlayPlacement(settings));
       placementState = "active";
       startPlacementPolling();
     } catch (error) {
@@ -159,7 +272,7 @@
   async function finishPlacement(restoreOriginal: boolean) {
     stopPlacementPolling();
 
-    if (restoreOriginal && draft && placementOrigin) {
+    if (restoreOriginal && placementOrigin) {
       applyPlacement(placementOrigin);
     }
 
@@ -182,17 +295,12 @@
   function applyPlacement(nextPlacement: OverlayPlacement) {
     placement = nextPlacement;
 
-    if (!draft) {
-      return;
-    }
-
-    draft = {
-      ...draft,
+    updateActiveSettings({
       startX: nextPlacement.x,
       startY: nextPlacement.y,
       startWidth: nextPlacement.width,
       startHeight: nextPlacement.height,
-    };
+    });
   }
 
   function draftPlacement(settings: OverlaySettings): OverlayPlacement {
@@ -209,13 +317,29 @@
     key: Key,
     value: OverlaySettings[Key],
   ) {
-    if (!draft) {
+    updateActiveSettings({ [key]: value } as Pick<OverlaySettings, Key>);
+  }
+
+  function updateActiveSettings(settingsPatch: Partial<OverlaySettings>) {
+    const store = settingsStore;
+
+    if (!store) {
       return;
     }
 
-    draft = {
-      ...draft,
-      [key]: value,
+    settingsStore = {
+      ...store,
+      profiles: store.profiles.map((profile) =>
+        profile.id === store.activeProfileId
+          ? {
+              ...profile,
+              settings: {
+                ...profile.settings,
+                ...settingsPatch,
+              },
+            }
+          : profile,
+      ),
     };
   }
 
@@ -264,6 +388,18 @@
   function opacityPercent(value: number): number {
     return Math.round(Math.min(Math.max(value, 0), 1) * 100);
   }
+
+  function saveStatusText(state: SaveState): string {
+    if (state.status === "saving") {
+      return "Saving";
+    }
+
+    if (state.status === "error") {
+      return state.message;
+    }
+
+    return "Saved";
+  }
 </script>
 
 <div
@@ -279,20 +415,57 @@
   >
     <header class="settings-header">
       <h2 id="overlay-settings-title">Settings</h2>
-      <button
-        type="button"
-        aria-label="Close settings"
-        onclick={() => void closeSettings()}
-      >
-        Close
-      </button>
+      <div class="settings-header-actions">
+        <div
+          class:save-error={saveState.status === "error"}
+          class="save-status"
+        >
+          <span class="save-status-icon" aria-hidden="true">
+            {saveState.status === "saved" ? "✓" : ""}
+          </span>
+          <span>{saveStatusText(saveState)}</span>
+        </div>
+        <button
+          type="button"
+          aria-label="Close settings"
+          onclick={() => void closeSettings()}
+        >
+          Close
+        </button>
+      </div>
     </header>
 
     {#if settingsState.status === "loading"}
       <p class="settings-message">Loading</p>
     {:else if settingsState.status === "error"}
       <p class="settings-message" role="alert">{settingsState.message}</p>
-    {:else if draft}
+    {:else if settingsStore}
+      {@const profile = getActiveProfile(settingsStore)}
+      {@const draft = profile.settings}
+      <div class="profile-bar" aria-label="Overlay profiles">
+        <div class="profile-tabs">
+          {#each settingsStore.profiles as profileOption}
+            <button
+              class:active-profile={profileOption.id ===
+                settingsStore.activeProfileId}
+              type="button"
+              onclick={() => selectProfile(profileOption.id)}
+            >
+              {profileOption.name}
+            </button>
+          {/each}
+        </div>
+        <label class="profile-name-field">
+          Profile name
+          <input
+            type="text"
+            maxlength="32"
+            value={profile.name}
+            oninput={(event) => updateProfileName(textInput(event))}
+          />
+        </label>
+      </div>
+
       <div class="settings-grid">
         <form
           class="settings-form"
@@ -431,6 +604,25 @@
           </fieldset>
 
           <fieldset>
+            <legend>Interaction</legend>
+            <label class="checkbox-row">
+              <input
+                type="checkbox"
+                checked={draft.clickThrough}
+                onchange={(event) =>
+                  updateSetting(
+                    "clickThrough",
+                    (event.currentTarget as HTMLInputElement).checked,
+                  )}
+              />
+              <span>
+                <strong>Click-through overlay</strong>
+                <small>Let clicks pass through the caption box.</small>
+              </span>
+            </label>
+          </fieldset>
+
+          <fieldset>
             <legend>Starting window</legend>
             <div class="two-column-fields">
               <label>
@@ -527,24 +719,6 @@
           </div>
         </aside>
       </div>
-
-      <footer class="settings-actions">
-        <button
-          type="button"
-          class="secondary-action"
-          onclick={() => void closeSettings()}
-        >
-          Cancel
-        </button>
-        <button
-          type="button"
-          class="primary-action"
-          disabled={settingsState.status === "saving"}
-          onclick={saveSettings}
-        >
-          Save
-        </button>
-      </footer>
     {/if}
   </div>
 </div>
@@ -562,7 +736,7 @@
 
   .settings-panel {
     display: grid;
-    grid-template-rows: auto minmax(0, 1fr) auto;
+    grid-template-rows: auto auto minmax(0, 1fr);
     box-sizing: border-box;
     width: min(960px, 100%);
     max-height: min(760px, calc(100vh - 48px));
@@ -573,8 +747,7 @@
     box-shadow: var(--shadow-soft);
   }
 
-  .settings-header,
-  .settings-actions {
+  .settings-header {
     display: flex;
     align-items: center;
     justify-content: space-between;
@@ -584,6 +757,98 @@
 
   .settings-header {
     border-bottom: 1px solid var(--borderColor-muted);
+  }
+
+  .settings-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .save-status {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--fgColor-muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+
+  .save-status-icon {
+    display: grid;
+    width: 16px;
+    height: 16px;
+    place-items: center;
+    border-radius: 999px;
+    background: var(--button-primary-bgColor-rest);
+    color: var(--fgColor-onEmphasis);
+    font-size: 0.7rem;
+    line-height: 1;
+  }
+
+  .save-status:not(.save-error) .save-status-icon:empty {
+    background: transparent;
+    border: 2px solid var(--button-primary-bgColor-rest);
+  }
+
+  .save-status.save-error {
+    color: var(--danger-fgColor, oklch(74% 0.16 24));
+  }
+
+  .save-status.save-error .save-status-icon {
+    background: var(--danger-fgColor, oklch(74% 0.16 24));
+  }
+
+  .profile-bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(180px, 240px);
+    gap: 12px;
+    align-items: end;
+    min-width: 0;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--borderColor-muted);
+  }
+
+  .profile-tabs {
+    display: flex;
+    gap: 8px;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .profile-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .profile-tabs button {
+    min-height: 34px;
+    max-width: 128px;
+    flex: 0 0 auto;
+    overflow: hidden;
+    border: 1px solid var(--borderColor-default);
+    border-radius: var(--radius-default);
+    padding: 0 12px;
+    background: transparent;
+    color: var(--fgColor-muted);
+    cursor: pointer;
+    font-weight: 700;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .profile-tabs button:hover,
+  .profile-tabs button.active-profile {
+    background: var(--button-secondary-bgColor-hover);
+    color: var(--fgColor-default);
+  }
+
+  .profile-tabs button.active-profile {
+    border-color: var(--button-primary-bgColor-rest);
+  }
+
+  .profile-name-field {
+    gap: 5px;
   }
 
   h2 {
@@ -696,6 +961,13 @@
     cursor: pointer;
   }
 
+  input[type="checkbox"] {
+    width: 18px;
+    min-height: 18px;
+    accent-color: var(--button-primary-bgColor-rest);
+    cursor: pointer;
+  }
+
   .range-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 44px;
@@ -724,6 +996,24 @@
     grid-template-columns: 1fr 1fr;
     gap: 10px;
     min-width: 0;
+  }
+
+  .checkbox-row {
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: start;
+    gap: 10px;
+    color: var(--fgColor-default);
+    cursor: pointer;
+  }
+
+  .checkbox-row span {
+    display: grid;
+    gap: 2px;
+  }
+
+  .checkbox-row small {
+    color: var(--fgColor-muted);
+    font-size: 0.8rem;
   }
 
   .placement-tools {
@@ -801,11 +1091,6 @@
     line-height: 1.2;
   }
 
-  .settings-actions {
-    justify-content: flex-end;
-    border-top: 1px solid var(--borderColor-muted);
-  }
-
   .primary-action {
     border: 1px solid transparent;
     background: var(--button-primary-bgColor-rest);
@@ -836,6 +1121,10 @@
       grid-template-columns: 1fr;
       overflow: auto;
       scrollbar-width: none;
+    }
+
+    .profile-bar {
+      grid-template-columns: 1fr;
     }
 
     .settings-grid::-webkit-scrollbar {

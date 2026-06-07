@@ -1,4 +1,10 @@
 export type FontWeight = "normal" | "bold";
+export type OverlayProfileId =
+  | "profile1"
+  | "profile2"
+  | "profile3"
+  | "profile4"
+  | "profile5";
 
 export type OverlaySettings = {
   fontFamily: string;
@@ -13,6 +19,18 @@ export type OverlaySettings = {
   startHeight: number;
   startX?: number | null;
   startY?: number | null;
+  clickThrough: boolean;
+};
+
+export type OverlaySettingsProfile = {
+  id: OverlayProfileId;
+  name: string;
+  settings: OverlaySettings;
+};
+
+export type OverlaySettingsStore = {
+  activeProfileId: OverlayProfileId;
+  profiles: OverlaySettingsProfile[];
 };
 
 export type OverlayPlacement = {
@@ -43,6 +61,16 @@ export function rgbaPreviewColor(color: string, opacity: number): string {
   }
 
   return `rgb(${parsed.red} ${parsed.green} ${parsed.blue} / ${alpha})`;
+}
+
+export function hasValidOverlaySettingsColors(
+  settings: OverlaySettings,
+): boolean {
+  return (
+    parseColor(settings.textColor) !== undefined &&
+    parseColor(settings.outlineColor) !== undefined &&
+    parseColor(settings.backgroundColor) !== undefined
+  );
 }
 
 function parseColor(value: string):

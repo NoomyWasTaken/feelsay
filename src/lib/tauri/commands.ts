@@ -1,8 +1,10 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AudioLevelEvent } from "$lib/domain/audio-meter";
 import type {
+  OverlayProfileId,
   OverlayPlacement,
   OverlaySettings,
+  OverlaySettingsStore,
 } from "$lib/domain/overlay-settings";
 import type {
   AudioSource,
@@ -50,6 +52,24 @@ export function saveOverlaySettings(
   settings: OverlaySettings,
 ): Promise<OverlaySettings> {
   return invoke<OverlaySettings>("save_overlay_settings", { settings });
+}
+
+export function getOverlaySettingsStore(): Promise<OverlaySettingsStore> {
+  return invoke<OverlaySettingsStore>("get_overlay_settings_store");
+}
+
+export function saveOverlaySettingsStore(
+  store: OverlaySettingsStore,
+): Promise<OverlaySettingsStore> {
+  return invoke<OverlaySettingsStore>("save_overlay_settings_store", { store });
+}
+
+export function selectOverlaySettingsProfile(
+  profileId: OverlayProfileId,
+): Promise<OverlaySettingsStore> {
+  return invoke<OverlaySettingsStore>("select_overlay_settings_profile", {
+    profileId,
+  });
 }
 
 export function startOverlayPlacement(

@@ -1,7 +1,7 @@
 use crate::{
     app_error::{AppError, CommandResult},
     app_state::AppState,
-    overlay_settings::{OverlayPlacement, OverlaySettings},
+    overlay_settings::{OverlayPlacement, OverlayProfileId, OverlaySettings, OverlaySettingsStore},
     platform,
     platform::{PlatformCapabilityProvider, SourceEnumerator, SourcePreviewProvider},
     source::{AudioSource, PlatformCapabilities, SourcePreview},
@@ -83,6 +83,29 @@ pub fn save_overlay_settings(
     settings: OverlaySettings,
 ) -> CommandResult<OverlaySettings> {
     Ok(state.overlay_settings().save(settings)?)
+}
+
+#[tauri::command]
+pub fn get_overlay_settings_store(
+    state: State<'_, AppState>,
+) -> CommandResult<OverlaySettingsStore> {
+    Ok(state.overlay_settings().load_store()?)
+}
+
+#[tauri::command]
+pub fn save_overlay_settings_store(
+    state: State<'_, AppState>,
+    store: OverlaySettingsStore,
+) -> CommandResult<OverlaySettingsStore> {
+    Ok(state.overlay_settings().save_store(store)?)
+}
+
+#[tauri::command]
+pub fn select_overlay_settings_profile(
+    state: State<'_, AppState>,
+    profile_id: OverlayProfileId,
+) -> CommandResult<OverlaySettingsStore> {
+    Ok(state.overlay_settings().select_profile(profile_id)?)
 }
 
 #[tauri::command]

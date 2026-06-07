@@ -49,11 +49,17 @@ impl AppState {
         }
 
         let settings = self.overlay_settings_service.load()?;
+        self.overlay_settings_service
+            .write_runtime_settings(&settings)?;
         let settings = serde_json::to_string(&settings)
             .map_err(|error| crate::app_error::AppError::Window(error.to_string()))?;
         let child = Command::new(std::env::current_exe()?)
             .arg("--caption-window-child")
             .env("FEELSAY_OVERLAY_SETTINGS", settings)
+            .env(
+                "FEELSAY_OVERLAY_SETTINGS_FILE",
+                self.overlay_settings_service.runtime_settings_path(),
+            )
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
