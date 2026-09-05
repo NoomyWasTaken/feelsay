@@ -81,7 +81,9 @@ export function createApplicationSelection(
 ): SourceSelection | null {
   const selectedApplications = sources
     .filter(
-      (source) => source.kind === "application" || source.kind === "window",
+      (source) =>
+        source.isAvailable &&
+        (source.kind === "application" || source.kind === "window"),
     )
     .map((source) => source.id)
     .filter((sourceId) => applicationIds.includes(sourceId));

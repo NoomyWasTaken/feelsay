@@ -10,6 +10,7 @@ export type OverlaySettings = {
   fontFamily: string;
   fontSize: number;
   fontWeight: FontWeight;
+  originalLineScale: number;
   textColor: string;
   backgroundColor: string;
   backgroundOpacity: number;

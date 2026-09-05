@@ -1,20 +1,32 @@
 # Feelsay
 
-Lightweight cross-platform desktop foundation for local-first real-time captions and translation.
+Lightweight Windows-first desktop foundation for local-first real-time captions and translation.
 
 ## Current Scope
 
-The app currently contains the shell only:
+The app currently includes:
 
-- Tauri 2 desktop app with Rust backend and Svelte/TypeScript frontend
-- Minimal dashboard with source selection and Start/Stop controls
-- Rust platform/source scaffolding
-- Mock audio meter scaffolding
-- Stub modules for future audio capture, ASR, translation, and transcript work
+- Tauri 2 desktop shell with Rust backend and Svelte/TypeScript frontend
+- Minimal main window with source selection, Start/Stop, audio meter, and Settings
+- Windows-first source/device enumeration scaffolding
+- Real Windows microphone and system/output audio level preview
+- VAD-based speech/silence status
+- Child-process Caption Overlay window on Windows
+- Overlay settings with live autosave, five profiles, visual placement, and click-through mode
+- Model management metadata for local Whisper models
+- Local ASR through an external `whisper.cpp` executable path
+- Caption, translate-to-English, and original-plus-English caption modes
+- Stub modules for future translation, transcripts, and platform expansion
 
-The Caption Overlay implementation has been intentionally purged and documented in `docs/caption-overlay.md` so it can be rebuilt from a clean baseline.
+No production diarization, mobile app, or cloud service is implemented yet.
 
-No audio capture, ASR, translation, diarization, export, mobile app, or cloud service is implemented yet.
+## Docs
+
+- Product summary: [`docs/SUMMARY.md`](docs/SUMMARY.md)
+- Product/technical spec PDF: [`docs/realtime_caption_translation_app_spec.pdf`](docs/realtime_caption_translation_app_spec.pdf)
+- Caption Overlay notes: [`docs/caption-overlay.md`](docs/caption-overlay.md)
+- Product backlog: [`docs/BACKLOG.md`](docs/BACKLOG.md)
+- Installer smoke test: [`docs/installer-smoke-test.md`](docs/installer-smoke-test.md)
 
 ## Requirements
 
@@ -23,7 +35,9 @@ No audio capture, ASR, translation, diarization, export, mobile app, or cloud se
 - Rust/Cargo
 - Tauri desktop prerequisites for your OS
 
-Windows is the first target. macOS and Linux are kept in mind.
+Windows is the first target. macOS and Linux should stay possible through platform adapters.
+
+Optional local ASR builds use `whisper-rs` behind the `local-asr` Cargo feature. On Windows, that feature requires LLVM/libclang and `LIBCLANG_PATH` pointing to the folder containing `libclang.dll`.
 
 ## Setup
 
@@ -53,10 +67,12 @@ npm run rust:lint
 cargo test --manifest-path src-tauri/Cargo.toml
 ```
 
-## Manual Test
+## Manual Smoke Test
 
 1. Run `npm run tauri dev`.
-2. Confirm the dashboard opens and looks like the Feelsay app, not the Tauri template.
-3. Confirm `Start` is disabled until a source is selected.
-4. Select a source.
-5. Confirm `Start` and `Stop` update the shell state without creating a Caption Overlay window.
+2. Select a source.
+3. Click `Start`.
+4. Confirm the Caption Overlay opens.
+5. Open Settings and adjust overlay appearance.
+6. Confirm settings autosave and update the running overlay.
+7. Click `Stop` and confirm the overlay closes.

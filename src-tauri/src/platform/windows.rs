@@ -4,8 +4,8 @@ use crate::{
         AudioCaptureProvider, PlatformCapabilityProvider, SourceEnumerator, SourcePreviewProvider,
     },
     source::{
-        AudioEndpointFlow, AudioSource, CssPreviewMetadata, PlatformCapabilities, SourceKind,
-        SourceMetadata, SourcePreview,
+        AudioEndpointFlow, AudioSource, CssPreviewMetadata, MockPreviewTemplate,
+        PlatformCapabilities, SourceKind, SourceMetadata, SourcePreview,
     },
 };
 
@@ -73,11 +73,11 @@ impl PlatformCapabilityProvider for WindowsPlatformProvider {
             platform: "windows".to_string(),
             source_enumeration_available: true,
             window_capture_available: false,
-            system_audio_capture_available: false,
-            microphone_capture_available: false,
+            system_audio_capture_available: true,
+            microphone_capture_available: true,
             live_preview_available: false,
             supports_system_audio: true,
-            supports_application_audio: true,
+            supports_application_audio: false,
             supports_microphone: true,
             supports_live_preview: false,
             supports_loopback_capture: true,
@@ -425,7 +425,7 @@ fn window_source(window: WindowSource) -> AudioSource {
         id: format!("window:{:x}:{}", window.hwnd.0 as usize, window.process_id),
         display_name: window.title.clone(),
         kind: SourceKind::Window,
-        is_available: true,
+        is_available: false,
         platform: "windows".to_string(),
         metadata: Some(SourceMetadata {
             app_name: window.process_path.as_deref().and_then(process_stem),
@@ -441,6 +441,11 @@ fn window_source(window: WindowSource) -> AudioSource {
 }
 
 fn window_preview(source: AudioSource) -> SourcePreview {
+    let template = source
+        .metadata
+        .as_ref()
+        .and_then(|metadata| preview_template_for(metadata, &source.display_name));
+
     SourcePreview {
         source_id: source.id,
         title: source.display_name.clone(),
@@ -448,9 +453,62 @@ fn window_preview(source: AudioSource) -> SourcePreview {
         thumbnail_url: None,
         thumbnail_data: None,
         is_live_preview_available: false,
-        css_preview: Some(css_preview_for(&source.display_name)),
-        mock_template: None,
+        css_preview: template
+            .is_none()
+            .then(|| css_preview_for(&source.display_name)),
+        mock_template: template,
     }
+}
+
+#[cfg(target_os = "windows")]
+fn preview_template_for(
+    metadata: &SourceMetadata,
+    display_name: &str,
+) -> Option<MockPreviewTemplate> {
+    let haystack = [
+        metadata.app_name.as_deref(),
+        metadata.process_name.as_deref(),
+        metadata.window_title.as_deref(),
+        Some(display_name),
+    ]
+    .into_iter()
+    .flatten()
+    .collect::<Vec<_>>()
+    .join(" ")
+    .to_lowercase();
+
+    if contains_any(&haystack, &["chrome", "edge", "firefox", "browser"]) {
+        return Some(MockPreviewTemplate::Browser);
+    }
+
+    if contains_any(&haystack, &["discord", "slack", "chat"]) {
+        return Some(MockPreviewTemplate::Chat);
+    }
+
+    if contains_any(&haystack, &["teams", "zoom", "meet", "call"]) {
+        return Some(MockPreviewTemplate::Meeting);
+    }
+
+    if contains_any(
+        &haystack,
+        &["vlc", "media player", "youtube", "netflix", "video"],
+    ) {
+        return Some(MockPreviewTemplate::Video);
+    }
+
+    if contains_any(
+        &haystack,
+        &["league", "steam", "game", "valorant", "minecraft"],
+    ) {
+        return Some(MockPreviewTemplate::Game);
+    }
+
+    None
+}
+
+#[cfg(target_os = "windows")]
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
 }
 
 fn css_preview_for(title: &str) -> CssPreviewMetadata {
@@ -490,6 +548,7 @@ fn is_useless_title(title: &str) -> bool {
             title.as_str(),
             "ashotplugctrl"
                 | "program manager"
+                | "settings"
                 | "windows input experience"
                 | "desktopwindowxamlsource"
         )
@@ -505,6 +564,8 @@ fn is_useless_window_class(class_name: &str) -> bool {
             | "Shell_TrayWnd"
             | "Shell_SecondaryTrayWnd"
             | "Windows.UI.Core.CoreWindow"
+            | "ApplicationFrameInputSinkWindow"
+            | "Xaml_WindowedPopupClass"
     )
 }
 

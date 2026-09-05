@@ -1,5 +1,24 @@
 <script lang="ts">
   import { onDestroy, onMount } from "svelte";
+  import {
+    translationLanguageOptions,
+    type CaptionSettings,
+    type TranslationLanguage,
+  } from "$lib/domain/caption-settings";
+  import {
+    formatModelSize,
+    type ModelSettingsStore,
+  } from "$lib/domain/model-settings";
+  import type {
+    TranscriptExportFormat,
+    TranscriptSessionSummary,
+    TranscriptSettings,
+  } from "$lib/domain/transcript-settings";
+  import type { PerformanceSettings } from "$lib/domain/performance-settings";
+  import type {
+    TranslationEngineStatus,
+    TranslationSettings,
+  } from "$lib/domain/translation-settings";
   import type {
     OverlayProfileId,
     OverlayPlacement,
@@ -14,10 +33,29 @@
     rgbaPreviewColor,
   } from "$lib/domain/overlay-settings";
   import {
+    type AppMetadata,
     commandErrorMessage,
+    exportTranscriptSession,
+    getAppMetadata,
+    getCaptionSettings,
+    getModelSettingsStore,
     getOverlayPlacement,
     getOverlaySettingsStore,
+    getPerformanceSettings,
+    getTranscriptSettings,
+    getTranslationEngineStatus,
+    getTranslationSettings,
+    installDefaultAsrAssets,
+    listTranscriptSessions,
+    runAsrModelDiagnostic,
+    runCaptionFlowDiagnostic,
+    runTranslationEngineDiagnostic,
+    saveCaptionSettings,
+    saveModelSettingsStore,
     saveOverlaySettingsStore,
+    savePerformanceSettings,
+    saveTranscriptSettings,
+    saveTranslationSettings,
     startOverlayPlacement,
     stopOverlayPlacement,
   } from "$lib/tauri/commands";
@@ -51,16 +89,63 @@
 
   let { onClose }: Props = $props();
   let settingsState = $state<SettingsState>({ status: "loading" });
+  let appMetadata = $state<AppMetadata | null>(null);
   let settingsStore = $state<OverlaySettingsStore | null>(null);
+  let captionSettings = $state<CaptionSettings | null>(null);
+  let modelStore = $state<ModelSettingsStore | null>(null);
+  let performanceSettings = $state<PerformanceSettings | null>(null);
+  let translationSettings = $state<TranslationSettings | null>(null);
+  let translationStatus = $state<TranslationEngineStatus | null>(null);
+  let transcriptSettings = $state<TranscriptSettings | null>(null);
+  let transcriptSessions = $state<TranscriptSessionSummary[]>([]);
   let saveState = $state<SaveState>({ status: "saved" });
+  let captionSaveState = $state<SaveState>({ status: "saved" });
+  let modelSaveState = $state<SaveState>({ status: "saved" });
+  let performanceSaveState = $state<SaveState>({ status: "saved" });
+  let translationSaveState = $state<SaveState>({ status: "saved" });
+  let modelInstallState = $state<SaveState>({ status: "saved" });
+  let modelDiagnosticState = $state<
+    | { status: "idle" }
+    | { status: "running" }
+    | { status: "done"; text: string }
+    | { status: "error"; message: string }
+  >({ status: "idle" });
+  let translationDiagnosticState = $state<
+    | { status: "idle" }
+    | { status: "running" }
+    | { status: "done"; text: string }
+    | { status: "error"; message: string }
+  >({ status: "idle" });
+  let transcriptSaveState = $state<SaveState>({ status: "saved" });
   let placement = $state<OverlayPlacement | null>(null);
   let placementOrigin = $state<OverlayPlacement | null>(null);
   let placementState = $state<"idle" | "starting" | "active" | "error">("idle");
   let placementMessage = $state("");
+  let transcriptHistoryState = $state<
+    | { status: "idle" }
+    | { status: "loading" }
+    | { status: "exported"; path: string }
+    | { status: "error"; message: string }
+  >({ status: "idle" });
   let placementPoll: ReturnType<typeof setInterval> | undefined;
   let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let captionAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let modelAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let performanceAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let translationAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
+  let transcriptAutosaveTimer: ReturnType<typeof setTimeout> | undefined;
   let lastSavedStoreJson = "";
+  let lastSavedCaptionSettingsJson = "";
+  let lastSavedModelStoreJson = "";
+  let lastSavedPerformanceSettingsJson = "";
+  let lastSavedTranslationSettingsJson = "";
+  let lastSavedTranscriptSettingsJson = "";
   let saveRequestId = 0;
+  let captionSaveRequestId = 0;
+  let modelSaveRequestId = 0;
+  let performanceSaveRequestId = 0;
+  let translationSaveRequestId = 0;
+  let transcriptSaveRequestId = 0;
 
   onMount(() => {
     void loadSettings();
@@ -68,6 +153,11 @@
 
   onDestroy(() => {
     stopAutosaveTimer();
+    stopCaptionAutosaveTimer();
+    stopModelAutosaveTimer();
+    stopPerformanceAutosaveTimer();
+    stopTranslationAutosaveTimer();
+    stopTranscriptAutosaveTimer();
     void stopPlacement();
   });
 
@@ -100,11 +190,160 @@
     }, 200);
   });
 
+  $effect(() => {
+    const store = modelStore;
+
+    if (!store || settingsState.status !== "ready") {
+      return;
+    }
+
+    const serializedStore = JSON.stringify(store);
+
+    if (serializedStore === lastSavedModelStoreJson) {
+      return;
+    }
+
+    modelSaveState = { status: "saving" };
+    stopModelAutosaveTimer();
+
+    const requestId = ++modelSaveRequestId;
+    modelAutosaveTimer = setTimeout(() => {
+      void autosaveModelSettings(store, requestId);
+    }, 200);
+  });
+
+  $effect(() => {
+    const settings = captionSettings;
+
+    if (!settings || settingsState.status !== "ready") {
+      return;
+    }
+
+    const serializedSettings = JSON.stringify(settings);
+
+    if (serializedSettings === lastSavedCaptionSettingsJson) {
+      return;
+    }
+
+    captionSaveState = { status: "saving" };
+    stopCaptionAutosaveTimer();
+
+    const requestId = ++captionSaveRequestId;
+    captionAutosaveTimer = setTimeout(() => {
+      void autosaveCaptionSettings(settings, requestId);
+    }, 200);
+  });
+
+  $effect(() => {
+    const settings = performanceSettings;
+
+    if (!settings || settingsState.status !== "ready") {
+      return;
+    }
+
+    const serializedSettings = JSON.stringify(settings);
+
+    if (serializedSettings === lastSavedPerformanceSettingsJson) {
+      return;
+    }
+
+    performanceSaveState = { status: "saving" };
+    stopPerformanceAutosaveTimer();
+
+    const requestId = ++performanceSaveRequestId;
+    performanceAutosaveTimer = setTimeout(() => {
+      void autosavePerformanceSettings(settings, requestId);
+    }, 200);
+  });
+
+  $effect(() => {
+    const settings = translationSettings;
+
+    if (!settings || settingsState.status !== "ready") {
+      return;
+    }
+
+    const serializedSettings = JSON.stringify(settings);
+
+    if (serializedSettings === lastSavedTranslationSettingsJson) {
+      return;
+    }
+
+    translationSaveState = { status: "saving" };
+    stopTranslationAutosaveTimer();
+
+    const requestId = ++translationSaveRequestId;
+    translationAutosaveTimer = setTimeout(() => {
+      void autosaveTranslationSettings(settings, requestId);
+    }, 200);
+  });
+
+  $effect(() => {
+    const settings = transcriptSettings;
+
+    if (!settings || settingsState.status !== "ready") {
+      return;
+    }
+
+    const serializedSettings = JSON.stringify(settings);
+
+    if (serializedSettings === lastSavedTranscriptSettingsJson) {
+      return;
+    }
+
+    transcriptSaveState = { status: "saving" };
+    stopTranscriptAutosaveTimer();
+
+    const requestId = ++transcriptSaveRequestId;
+    transcriptAutosaveTimer = setTimeout(() => {
+      void autosaveTranscriptSettings(settings, requestId);
+    }, 200);
+  });
+
   async function loadSettings() {
     try {
-      settingsStore = await getOverlaySettingsStore();
+      const [
+        loadedSettingsStore,
+        loadedAppMetadata,
+        loadedCaptionSettings,
+        loadedModelStore,
+        loadedPerformanceSettings,
+        loadedTranslationSettings,
+        loadedTranslationStatus,
+        loadedTranscriptSettings,
+        loadedTranscriptSessions,
+      ] = await Promise.all([
+        getOverlaySettingsStore(),
+        getAppMetadata(),
+        getCaptionSettings(),
+        getModelSettingsStore(),
+        getPerformanceSettings(),
+        getTranslationSettings(),
+        getTranslationEngineStatus(),
+        getTranscriptSettings(),
+        listTranscriptSessions(),
+      ]);
+      settingsStore = loadedSettingsStore;
+      appMetadata = loadedAppMetadata;
+      captionSettings = loadedCaptionSettings;
+      modelStore = loadedModelStore;
+      performanceSettings = loadedPerformanceSettings;
+      translationSettings = loadedTranslationSettings;
+      translationStatus = loadedTranslationStatus;
+      transcriptSettings = loadedTranscriptSettings;
+      transcriptSessions = loadedTranscriptSessions;
       lastSavedStoreJson = serializeStore(settingsStore);
+      lastSavedCaptionSettingsJson = JSON.stringify(captionSettings);
+      lastSavedModelStoreJson = JSON.stringify(modelStore);
+      lastSavedPerformanceSettingsJson = JSON.stringify(performanceSettings);
+      lastSavedTranslationSettingsJson = JSON.stringify(translationSettings);
+      lastSavedTranscriptSettingsJson = JSON.stringify(transcriptSettings);
       saveState = { status: "saved" };
+      captionSaveState = { status: "saved" };
+      modelSaveState = { status: "saved" };
+      performanceSaveState = { status: "saved" };
+      translationSaveState = { status: "saved" };
+      transcriptSaveState = { status: "saved" };
       settingsState = { status: "ready" };
     } catch (error) {
       settingsState = {
@@ -147,6 +386,172 @@
     }
   }
 
+  function stopModelAutosaveTimer() {
+    if (modelAutosaveTimer) {
+      clearTimeout(modelAutosaveTimer);
+      modelAutosaveTimer = undefined;
+    }
+  }
+
+  function stopCaptionAutosaveTimer() {
+    if (captionAutosaveTimer) {
+      clearTimeout(captionAutosaveTimer);
+      captionAutosaveTimer = undefined;
+    }
+  }
+
+  function stopPerformanceAutosaveTimer() {
+    if (performanceAutosaveTimer) {
+      clearTimeout(performanceAutosaveTimer);
+      performanceAutosaveTimer = undefined;
+    }
+  }
+
+  function stopTranslationAutosaveTimer() {
+    if (translationAutosaveTimer) {
+      clearTimeout(translationAutosaveTimer);
+      translationAutosaveTimer = undefined;
+    }
+  }
+
+  function stopTranscriptAutosaveTimer() {
+    if (transcriptAutosaveTimer) {
+      clearTimeout(transcriptAutosaveTimer);
+      transcriptAutosaveTimer = undefined;
+    }
+  }
+
+  async function autosaveCaptionSettings(
+    settingsSnapshot: CaptionSettings,
+    requestId: number,
+  ) {
+    try {
+      const savedSettings = await saveCaptionSettings(settingsSnapshot);
+
+      if (requestId !== captionSaveRequestId) {
+        return;
+      }
+
+      lastSavedCaptionSettingsJson = JSON.stringify(savedSettings);
+      captionSettings = savedSettings;
+      captionSaveState = { status: "saved" };
+    } catch (error) {
+      if (requestId !== captionSaveRequestId) {
+        return;
+      }
+
+      captionSaveState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function autosaveModelSettings(
+    storeSnapshot: ModelSettingsStore,
+    requestId: number,
+  ) {
+    try {
+      const savedStore = await saveModelSettingsStore(storeSnapshot);
+
+      if (requestId !== modelSaveRequestId) {
+        return;
+      }
+
+      lastSavedModelStoreJson = JSON.stringify(savedStore);
+      modelStore = savedStore;
+      modelSaveState = { status: "saved" };
+    } catch (error) {
+      if (requestId !== modelSaveRequestId) {
+        return;
+      }
+
+      modelSaveState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function autosavePerformanceSettings(
+    settingsSnapshot: PerformanceSettings,
+    requestId: number,
+  ) {
+    try {
+      const savedSettings = await savePerformanceSettings(settingsSnapshot);
+
+      if (requestId !== performanceSaveRequestId) {
+        return;
+      }
+
+      lastSavedPerformanceSettingsJson = JSON.stringify(savedSettings);
+      performanceSettings = savedSettings;
+      performanceSaveState = { status: "saved" };
+    } catch (error) {
+      if (requestId !== performanceSaveRequestId) {
+        return;
+      }
+
+      performanceSaveState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function autosaveTranslationSettings(
+    settingsSnapshot: TranslationSettings,
+    requestId: number,
+  ) {
+    try {
+      const savedSettings = await saveTranslationSettings(settingsSnapshot);
+
+      if (requestId !== translationSaveRequestId) {
+        return;
+      }
+
+      lastSavedTranslationSettingsJson = JSON.stringify(savedSettings);
+      translationSettings = savedSettings;
+      translationStatus = await getTranslationEngineStatus();
+      translationSaveState = { status: "saved" };
+    } catch (error) {
+      if (requestId !== translationSaveRequestId) {
+        return;
+      }
+
+      translationSaveState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function autosaveTranscriptSettings(
+    settingsSnapshot: TranscriptSettings,
+    requestId: number,
+  ) {
+    try {
+      const savedSettings = await saveTranscriptSettings(settingsSnapshot);
+
+      if (requestId !== transcriptSaveRequestId) {
+        return;
+      }
+
+      lastSavedTranscriptSettingsJson = JSON.stringify(savedSettings);
+      transcriptSettings = savedSettings;
+      transcriptSaveState = { status: "saved" };
+    } catch (error) {
+      if (requestId !== transcriptSaveRequestId) {
+        return;
+      }
+
+      transcriptSaveState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
   function serializeStore(store: OverlaySettingsStore): string {
     return JSON.stringify(store);
   }
@@ -174,6 +579,13 @@
     return getActiveProfile(settingsStore).settings;
   }
 
+  function getActiveModel(store: ModelSettingsStore) {
+    return (
+      store.models.find((model) => model.id === store.activeModelId) ??
+      store.models[0]
+    );
+  }
+
   function selectProfile(profileId: OverlayProfileId) {
     if (!settingsStore) {
       return;
@@ -183,6 +595,200 @@
       ...settingsStore,
       activeProfileId: profileId,
     };
+  }
+
+  function selectModel(modelId: string) {
+    if (!modelStore) {
+      return;
+    }
+
+    modelStore = {
+      ...modelStore,
+      activeModelId: modelId,
+    };
+  }
+
+  function updateActiveModelPath(path: string) {
+    const store = modelStore;
+
+    if (!store) {
+      return;
+    }
+
+    modelStore = {
+      ...store,
+      models: store.models.map((model) =>
+        model.id === store.activeModelId ? { ...model, path } : model,
+      ),
+    };
+  }
+
+  function updateActiveModelExecutablePath(executablePath: string) {
+    const store = modelStore;
+
+    if (!store) {
+      return;
+    }
+
+    modelStore = {
+      ...store,
+      models: store.models.map((model) =>
+        model.id === store.activeModelId ? { ...model, executablePath } : model,
+      ),
+    };
+  }
+
+  async function installDefaultModel() {
+    modelInstallState = { status: "saving" };
+
+    try {
+      const installedStore = await installDefaultAsrAssets();
+      modelStore = installedStore;
+      lastSavedModelStoreJson = JSON.stringify(installedStore);
+      modelInstallState = { status: "saved" };
+    } catch (error) {
+      modelInstallState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function testAsrModel() {
+    modelDiagnosticState = { status: "running" };
+
+    try {
+      const result = await runAsrModelDiagnostic();
+      modelDiagnosticState = { status: "done", text: result.text };
+    } catch (error) {
+      modelDiagnosticState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function testCaptionFlow() {
+    modelDiagnosticState = { status: "running" };
+
+    try {
+      const result = await runCaptionFlowDiagnostic();
+      modelDiagnosticState = { status: "done", text: result.text };
+    } catch (error) {
+      modelDiagnosticState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  function updateTranscriptSaving(savingEnabled: boolean) {
+    const settings = transcriptSettings;
+
+    if (!settings) {
+      return;
+    }
+
+    transcriptSettings = {
+      ...settings,
+      savingEnabled,
+    };
+  }
+
+  function updateSpeakerLabels(speakerLabelsEnabled: boolean) {
+    updateCaptionSettings({ speakerLabelsEnabled });
+  }
+
+  function updateCaptionSettings(settingsPatch: Partial<CaptionSettings>) {
+    const settings = captionSettings;
+
+    if (!settings) {
+      return;
+    }
+
+    captionSettings = {
+      ...settings,
+      ...settingsPatch,
+    };
+  }
+
+  function updateTranslationSettings(
+    settingsPatch: Partial<TranslationSettings>,
+  ) {
+    const settings = translationSettings;
+
+    if (!settings) {
+      return;
+    }
+
+    translationSettings = {
+      ...settings,
+      ...settingsPatch,
+    };
+  }
+
+  async function testTranslationEngine() {
+    translationDiagnosticState = { status: "running" };
+
+    try {
+      const result = await runTranslationEngineDiagnostic();
+      translationDiagnosticState = {
+        status: "done",
+        text: result.translatedText,
+      };
+      translationStatus = await getTranslationEngineStatus();
+    } catch (error) {
+      translationDiagnosticState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  function updatePerformanceSettings(
+    settingsPatch: Partial<PerformanceSettings>,
+  ) {
+    const settings = performanceSettings;
+
+    if (!settings) {
+      return;
+    }
+
+    performanceSettings = {
+      ...settings,
+      ...settingsPatch,
+    };
+  }
+
+  async function refreshTranscriptSessions() {
+    transcriptHistoryState = { status: "loading" };
+
+    try {
+      transcriptSessions = await listTranscriptSessions();
+      transcriptHistoryState = { status: "idle" };
+    } catch (error) {
+      transcriptHistoryState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function exportTranscript(
+    session: TranscriptSessionSummary,
+    format: TranscriptExportFormat,
+  ) {
+    transcriptHistoryState = { status: "loading" };
+
+    try {
+      const path = await exportTranscriptSession(session.id, format);
+      transcriptHistoryState = { status: "exported", path };
+    } catch (error) {
+      transcriptHistoryState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
   }
 
   function updateProfileName(name: string) {
@@ -363,6 +969,11 @@
   }
 
   async function closeSettings() {
+    stopAutosaveTimer();
+    stopModelAutosaveTimer();
+    stopPerformanceAutosaveTimer();
+    stopTranslationAutosaveTimer();
+    stopTranscriptAutosaveTimer();
     await stopPlacement();
     onClose();
   }
@@ -371,14 +982,17 @@
     return `background: ${rgbaPreviewColor(settings.backgroundColor, settings.backgroundOpacity)}`;
   }
 
-  function previewTextStyle(settings: OverlaySettings): string {
+  function previewTextStyle(
+    settings: OverlaySettings,
+    fontSize = settings.fontSize,
+  ): string {
     const textColor = normalizeCssColor(settings.textColor, "#ffffff");
     const outlineColor = normalizeCssColor(settings.outlineColor, "#000000");
     const fontWeight = settings.fontWeight === "bold" ? 700 : 400;
 
     return [
       `font-family: ${JSON.stringify(settings.fontFamily)}, sans-serif`,
-      `font-size: ${settings.fontSize}px`,
+      `font-size: ${fontSize}px`,
       `font-weight: ${fontWeight}`,
       `color: ${textColor}`,
       `-webkit-text-stroke: ${settings.outlineWidth}px ${outlineColor}`,
@@ -400,6 +1014,10 @@
 
     return "Saved";
   }
+
+  function formatSessionTime(milliseconds: number): string {
+    return new Date(milliseconds).toLocaleString();
+  }
 </script>
 
 <div
@@ -415,6 +1033,12 @@
   >
     <header class="settings-header">
       <h2 id="overlay-settings-title">Settings</h2>
+      {#if appMetadata}
+        <p class="app-version">
+          {appMetadata.productName}
+          {appMetadata.version}
+        </p>
+      {/if}
       <div class="settings-header-actions">
         <div
           class:save-error={saveState.status === "error"}
@@ -471,6 +1095,455 @@
           class="settings-form"
           onsubmit={(event) => event.preventDefault()}
         >
+          {#if modelStore}
+            {@const activeModel = getActiveModel(modelStore)}
+            <fieldset>
+              <legend>Model</legend>
+              <label>
+                ASR model
+                <select
+                  value={modelStore.activeModelId}
+                  onchange={(event) => selectModel(textInput(event))}
+                >
+                  {#each modelStore.models as model}
+                    <option value={model.id}>{model.name}</option>
+                  {/each}
+                </select>
+              </label>
+              <p
+                class:model-ready={activeModel?.isInstalled}
+                class="model-status"
+              >
+                {activeModel?.isInstalled ? "Ready" : "Missing"}
+                {activeModel
+                  ? ` - ${formatModelSize(activeModel.fileSizeBytes)}`
+                  : ""}
+              </p>
+              <button
+                type="button"
+                class="secondary-action"
+                disabled={modelInstallState.status === "saving"}
+                onclick={() => void installDefaultModel()}
+              >
+                {modelInstallState.status === "saving"
+                  ? "Installing"
+                  : "Install default"}
+              </button>
+              <button
+                type="button"
+                class="secondary-action"
+                disabled={modelDiagnosticState.status === "running"}
+                onclick={() => void testAsrModel()}
+              >
+                {modelDiagnosticState.status === "running"
+                  ? "Testing"
+                  : "Test model"}
+              </button>
+              <button
+                type="button"
+                class="secondary-action"
+                disabled={modelDiagnosticState.status === "running"}
+                onclick={() => void testCaptionFlow()}
+              >
+                {modelDiagnosticState.status === "running"
+                  ? "Testing"
+                  : "Test caption flow"}
+              </button>
+              <label>
+                Model file
+                <input
+                  type="text"
+                  value={activeModel?.path ?? ""}
+                  oninput={(event) => updateActiveModelPath(textInput(event))}
+                />
+              </label>
+              <label>
+                Whisper executable
+                <input
+                  type="text"
+                  value={activeModel?.executablePath ?? ""}
+                  oninput={(event) =>
+                    updateActiveModelExecutablePath(textInput(event))}
+                />
+              </label>
+              <p class="model-hint">
+                Set a GGML model and whisper.cpp executable for local captions.
+              </p>
+              {#if modelInstallState.status === "error"}
+                <p class="model-hint error" role="alert">
+                  {modelInstallState.message}
+                </p>
+              {/if}
+              {#if modelDiagnosticState.status === "done"}
+                <p class="model-hint">Heard: {modelDiagnosticState.text}</p>
+              {:else if modelDiagnosticState.status === "error"}
+                <p class="model-hint error" role="alert">
+                  {modelDiagnosticState.message}
+                </p>
+              {/if}
+              {#if modelSaveState.status === "error"}
+                <p class="model-hint error" role="alert">
+                  {modelSaveState.message}
+                </p>
+              {/if}
+            </fieldset>
+          {/if}
+
+          {#if captionSettings && translationSettings}
+            <fieldset>
+              <legend>Translation</legend>
+              <div class="two-column-fields">
+                <label>
+                  From
+                  <select
+                    value={captionSettings.translationSourceLanguage}
+                    onchange={(event) =>
+                      updateCaptionSettings({
+                        translationSourceLanguage: textInput(
+                          event,
+                        ) as TranslationLanguage,
+                      })}
+                  >
+                    {#each translationLanguageOptions as language}
+                      <option value={language.value}>{language.label}</option>
+                    {/each}
+                  </select>
+                </label>
+                <label>
+                  To
+                  <select
+                    value={captionSettings.translationTargetLanguage}
+                    onchange={(event) =>
+                      updateCaptionSettings({
+                        translationTargetLanguage:
+                          textInput(event) === "auto"
+                            ? "english"
+                            : (textInput(event) as TranslationLanguage),
+                      })}
+                  >
+                    {#each translationLanguageOptions.filter((language) => language.value !== "auto") as language}
+                      <option value={language.value}>{language.label}</option>
+                    {/each}
+                  </select>
+                </label>
+              </div>
+              <label>
+                Argos executable
+                <input
+                  type="text"
+                  value={translationSettings.executablePath}
+                  oninput={(event) =>
+                    updateTranslationSettings({
+                      executablePath: textInput(event),
+                    })}
+                />
+              </label>
+              <p
+                class:model-ready={translationStatus?.isAvailable}
+                class="model-status"
+              >
+                {translationStatus?.isAvailable ? "Ready" : "Missing"}
+                {translationStatus ? ` - ${translationStatus.message}` : ""}
+              </p>
+              <button
+                type="button"
+                class="secondary-action"
+                disabled={translationDiagnosticState.status === "running"}
+                onclick={() => void testTranslationEngine()}
+              >
+                {translationDiagnosticState.status === "running"
+                  ? "Testing"
+                  : "Test translation"}
+              </button>
+              <p class="model-hint">
+                Uses local Argos Translate packages for non-English targets.
+              </p>
+              {#if translationDiagnosticState.status === "done"}
+                <p class="model-hint">
+                  Translated: {translationDiagnosticState.text}
+                </p>
+              {:else if translationDiagnosticState.status === "error"}
+                <p class="model-hint error" role="alert">
+                  {translationDiagnosticState.message}
+                </p>
+              {/if}
+              {#if captionSaveState.status !== "saved"}
+                <p
+                  class:error={captionSaveState.status === "error"}
+                  class="model-hint"
+                  role={captionSaveState.status === "error"
+                    ? "alert"
+                    : undefined}
+                >
+                  {saveStatusText(captionSaveState)}
+                </p>
+              {/if}
+              {#if translationSaveState.status !== "saved"}
+                <p
+                  class:error={translationSaveState.status === "error"}
+                  class="model-hint"
+                  role={translationSaveState.status === "error"
+                    ? "alert"
+                    : undefined}
+                >
+                  {saveStatusText(translationSaveState)}
+                </p>
+              {/if}
+            </fieldset>
+          {/if}
+
+          {#if performanceSettings}
+            <fieldset>
+              <legend>Performance</legend>
+              <label>
+                Preset
+                <select
+                  value={performanceSettings.preset}
+                  onchange={(event) =>
+                    updatePerformanceSettings({
+                      preset: textInput(event) as PerformanceSettings["preset"],
+                    })}
+                >
+                  <option value="low_resource">Low Resource</option>
+                  <option value="balanced">Balanced</option>
+                  <option value="accuracy">Accuracy</option>
+                  <option value="custom">Custom</option>
+                </select>
+              </label>
+              <p class="model-hint">{performanceSettings.resourceImpact}</p>
+
+              {#if performanceSettings.preset === "custom"}
+                <div class="two-column-fields">
+                  <label>
+                    Min chunk
+                    <input
+                      type="number"
+                      min="1"
+                      max="10"
+                      step="0.5"
+                      value={performanceSettings.minTranscribeSeconds}
+                      oninput={(event) =>
+                        updatePerformanceSettings({
+                          minTranscribeSeconds: numberInput(event),
+                        })}
+                    />
+                  </label>
+                  <label>
+                    Max chunk
+                    <input
+                      type="number"
+                      min="2"
+                      max="20"
+                      step="0.5"
+                      value={performanceSettings.maxTranscribeSeconds}
+                      oninput={(event) =>
+                        updatePerformanceSettings({
+                          maxTranscribeSeconds: numberInput(event),
+                        })}
+                    />
+                  </label>
+                  <label>
+                    Interval
+                    <input
+                      type="number"
+                      min="500"
+                      max="5000"
+                      step="100"
+                      value={performanceSettings.transcribeIntervalMs}
+                      oninput={(event) =>
+                        updatePerformanceSettings({
+                          transcribeIntervalMs: numberInput(event),
+                        })}
+                    />
+                  </label>
+                  <label>
+                    Queue
+                    <input
+                      type="number"
+                      min="1"
+                      max="8"
+                      value={performanceSettings.asrQueueCapacity}
+                      oninput={(event) =>
+                        updatePerformanceSettings({
+                          asrQueueCapacity: numberInput(event),
+                        })}
+                    />
+                  </label>
+                </div>
+                <label>
+                  Speech sensitivity
+                  <span class="range-row">
+                    <input
+                      type="range"
+                      min="0.01"
+                      max="0.12"
+                      step="0.005"
+                      value={performanceSettings.vadSpeechLevelThreshold}
+                      oninput={(event) =>
+                        updatePerformanceSettings({
+                          vadSpeechLevelThreshold: numberInput(event),
+                        })}
+                    />
+                    <output>
+                      {performanceSettings.vadSpeechLevelThreshold.toFixed(3)}
+                    </output>
+                  </span>
+                </label>
+                <label>
+                  Silence release
+                  <span class="range-row">
+                    <input
+                      type="range"
+                      min="0.005"
+                      max="0.08"
+                      step="0.005"
+                      value={performanceSettings.vadSilenceLevelThreshold}
+                      oninput={(event) =>
+                        updatePerformanceSettings({
+                          vadSilenceLevelThreshold: numberInput(event),
+                        })}
+                    />
+                    <output>
+                      {performanceSettings.vadSilenceLevelThreshold.toFixed(3)}
+                    </output>
+                  </span>
+                </label>
+              {/if}
+
+              {#if performanceSaveState.status !== "saved"}
+                <p
+                  class:error={performanceSaveState.status === "error"}
+                  class="model-hint"
+                  role={performanceSaveState.status === "error"
+                    ? "alert"
+                    : undefined}
+                >
+                  {saveStatusText(performanceSaveState)}
+                </p>
+              {/if}
+            </fieldset>
+          {/if}
+
+          {#if captionSettings}
+            <fieldset>
+              <legend>Speaker labels</legend>
+              <label class="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={captionSettings.speakerLabelsEnabled}
+                  onchange={(event) =>
+                    updateSpeakerLabels(
+                      (event.currentTarget as HTMLInputElement).checked,
+                    )}
+                />
+                <span>
+                  <strong>Experimental speaker labels</strong>
+                  <small>High-resource mode. Shows low/medium confidence.</small
+                  >
+                </span>
+              </label>
+              {#if captionSaveState.status !== "saved"}
+                <p
+                  class:error={captionSaveState.status === "error"}
+                  class="model-hint"
+                  role={captionSaveState.status === "error"
+                    ? "alert"
+                    : undefined}
+                >
+                  {saveStatusText(captionSaveState)}
+                </p>
+              {/if}
+            </fieldset>
+          {/if}
+
+          {#if transcriptSettings}
+            <fieldset>
+              <legend>Transcripts</legend>
+              <label class="checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={transcriptSettings.savingEnabled}
+                  onchange={(event) =>
+                    updateTranscriptSaving(
+                      (event.currentTarget as HTMLInputElement).checked,
+                    )}
+                />
+                <span>
+                  <strong>Save transcripts</strong>
+                  <small>Off by default. Stored locally.</small>
+                </span>
+              </label>
+              {#if transcriptSaveState.status !== "saved"}
+                <p
+                  class:error={transcriptSaveState.status === "error"}
+                  class="model-hint"
+                  role={transcriptSaveState.status === "error"
+                    ? "alert"
+                    : undefined}
+                >
+                  {saveStatusText(transcriptSaveState)}
+                </p>
+              {/if}
+              <div class="transcript-history">
+                <div class="section-row">
+                  <strong>History</strong>
+                  <button
+                    type="button"
+                    class="secondary-action small-action"
+                    onclick={() => void refreshTranscriptSessions()}
+                  >
+                    Refresh
+                  </button>
+                </div>
+
+                {#if transcriptSessions.length === 0}
+                  <p class="model-hint">No saved transcripts yet.</p>
+                {:else}
+                  <div class="transcript-list">
+                    {#each transcriptSessions as session}
+                      <article class="transcript-session">
+                        <div>
+                          <strong>{session.sourceSummary}</strong>
+                          <small>
+                            {formatSessionTime(session.startedAtMs)} ·
+                            {session.segmentCount} segments
+                          </small>
+                        </div>
+                        <div class="export-actions">
+                          {#each ["txt", "srt", "vtt", "json"] as format}
+                            <button
+                              type="button"
+                              class="secondary-action small-action"
+                              onclick={() =>
+                                void exportTranscript(
+                                  session,
+                                  format as TranscriptExportFormat,
+                                )}
+                            >
+                              {format.toUpperCase()}
+                            </button>
+                          {/each}
+                        </div>
+                      </article>
+                    {/each}
+                  </div>
+                {/if}
+
+                {#if transcriptHistoryState.status === "loading"}
+                  <p class="model-hint">Working</p>
+                {:else if transcriptHistoryState.status === "exported"}
+                  <p class="model-hint">
+                    Exported to {transcriptHistoryState.path}
+                  </p>
+                {:else if transcriptHistoryState.status === "error"}
+                  <p class="model-hint error" role="alert">
+                    {transcriptHistoryState.message}
+                  </p>
+                {/if}
+              </div>
+            </fieldset>
+          {/if}
+
           <fieldset>
             <legend>Text</legend>
             <label>
@@ -512,6 +1585,21 @@
                 <option value="normal">Normal</option>
                 <option value="bold">Bold</option>
               </select>
+            </label>
+            <label>
+              Original line
+              <span class="range-row">
+                <input
+                  type="range"
+                  min="0.6"
+                  max="1"
+                  step="0.01"
+                  value={draft.originalLineScale}
+                  oninput={(event) =>
+                    updateSetting("originalLineScale", numberInput(event))}
+                />
+                <output>{Math.round(draft.originalLineScale * 100)}%</output>
+              </span>
             </label>
             <label>
               Color
@@ -712,8 +1800,18 @@
         <aside class="preview-pane" aria-label="Overlay preview">
           <div class="preview-stage">
             <div class="caption-preview" style={previewSurfaceStyle(draft)}>
-              <p style={previewTextStyle(draft)}>
-                Live captions will appear here.
+              <p>
+                <span
+                  style={previewTextStyle(
+                    draft,
+                    Math.round(draft.fontSize * draft.originalLineScale),
+                  )}
+                >
+                  Original caption
+                </span>
+                <span style={previewTextStyle(draft)}>
+                  English translation
+                </span>
               </p>
             </div>
           </div>
@@ -855,6 +1953,13 @@
     margin: 0;
     color: var(--fgColor-default);
     font-size: 1.125rem;
+  }
+
+  .app-version {
+    margin: 0 auto 0 0;
+    color: var(--fgColor-muted);
+    font-size: 0.8rem;
+    font-weight: 700;
   }
 
   .settings-header button,
@@ -1042,10 +2147,67 @@
     gap: 8px;
   }
 
+  .section-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--fgColor-default);
+  }
+
+  .small-action {
+    min-height: 30px;
+    padding: 0 10px;
+    font-size: 0.78rem;
+  }
+
+  .transcript-history,
+  .transcript-list,
+  .transcript-session {
+    display: grid;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .transcript-session {
+    border: 1px solid var(--borderColor-muted);
+    border-radius: var(--radius-default);
+    padding: 10px;
+    background: var(--bgColor-inset);
+  }
+
+  .transcript-session small {
+    display: block;
+    margin-top: 3px;
+    color: var(--fgColor-muted);
+    font-size: 0.76rem;
+  }
+
+  .export-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
   .placement-error {
     margin: 0;
     color: var(--danger-fgColor, oklch(74% 0.16 24));
     font-size: 0.84rem;
+  }
+
+  .model-status,
+  .model-hint {
+    margin: 0;
+    color: var(--fgColor-muted);
+    font-size: 0.84rem;
+  }
+
+  .model-status.model-ready {
+    color: var(--button-primary-bgColor-rest);
+  }
+
+  .model-hint.error {
+    color: var(--danger-fgColor, oklch(74% 0.16 24));
   }
 
   .preview-pane {
@@ -1086,6 +2248,8 @@
   }
 
   .caption-preview p {
+    display: grid;
+    gap: 6px;
     margin: 0;
     text-align: center;
     line-height: 1.2;

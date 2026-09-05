@@ -16,19 +16,6 @@
       src={preview.thumbnailUrl ?? preview.thumbnailData}
       draggable="false"
     />
-  {:else if preview.cssPreview}
-    <span
-      class="mock css-preview"
-      style:--preview-accent={preview.cssPreview.accentColor}
-      style:--preview-background={preview.cssPreview.background}
-    >
-      <span class="css-preview-bar"></span>
-      <span class="css-preview-body">
-        <span></span>
-        <span></span>
-        <span></span>
-      </span>
-    </span>
   {:else if preview.mockTemplate === "browser"}
     <span class="mock browser">
       <span class="browser-bar">
@@ -77,6 +64,19 @@
       <span class="game-panel left"></span>
       <span class="game-panel right"></span>
       <span class="game-map"></span>
+    </span>
+  {:else if preview.cssPreview}
+    <span
+      class="mock css-preview"
+      style:--preview-accent={preview.cssPreview.accentColor}
+      style:--preview-background={preview.cssPreview.background}
+    >
+      <span class="css-preview-bar"></span>
+      <span class="css-preview-body">
+        <span></span>
+        <span></span>
+        <span></span>
+      </span>
     </span>
   {:else}
     <span class="mock fallback"></span>

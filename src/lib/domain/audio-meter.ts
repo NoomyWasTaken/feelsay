@@ -1,8 +1,10 @@
-export type AudioMeterStatus = "idle" | "starting" | "active";
+export type AudioMeterStatus = "idle" | "starting" | "active" | "error";
 
 export type AudioLevelEvent = {
   level: number;
   status: AudioMeterStatus;
   sourceIds: string[];
-  isMock: true;
+  isMock: boolean;
+  speechDetected: boolean;
+  message?: string;
 };

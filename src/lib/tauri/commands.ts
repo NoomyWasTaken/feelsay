@@ -1,16 +1,34 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AudioLevelEvent } from "$lib/domain/audio-meter";
+import type { CaptionSettings } from "$lib/domain/caption-settings";
+import type {
+  AsrDiagnosticResult,
+  ModelSettingsStore,
+  ModelStatus,
+} from "$lib/domain/model-settings";
 import type {
   OverlayProfileId,
   OverlayPlacement,
   OverlaySettings,
   OverlaySettingsStore,
 } from "$lib/domain/overlay-settings";
+import type { PerformanceSettings } from "$lib/domain/performance-settings";
 import type {
   AudioSource,
   PlatformCapabilities,
   SourcePreview,
 } from "$lib/domain/source-selection";
+import type {
+  TranscriptExportFormat,
+  TranscriptSegment,
+  TranscriptSettings,
+  TranscriptSessionSummary,
+} from "$lib/domain/transcript-settings";
+import type {
+  TranslationDiagnosticResult,
+  TranslationEngineStatus,
+  TranslationSettings,
+} from "$lib/domain/translation-settings";
 
 export type SessionState = "idle" | "starting" | "listening" | "error";
 
@@ -20,12 +38,24 @@ export type AppStatus = {
   selectedSource: string | null;
 };
 
+export type AppMetadata = {
+  productName: string;
+  version: string;
+};
+
+export function getAppMetadata(): Promise<AppMetadata> {
+  return invoke<AppMetadata>("get_app_metadata");
+}
+
 export function getAppStatus(): Promise<AppStatus> {
   return invoke<AppStatus>("get_app_status");
 }
 
-export function startAudioMeter(sourceIds: string[]): Promise<void> {
-  return invoke<void>("start_audio_meter", { sourceIds });
+export function startAudioMeter(
+  sourceIds: string[],
+  sourceLabel?: string,
+): Promise<void> {
+  return invoke<void>("start_audio_meter", { sourceIds, sourceLabel });
 }
 
 export function stopAudioMeter(): Promise<void> {
@@ -98,6 +128,113 @@ export function listAvailableSources(): Promise<AudioSource[]> {
 
 export function getSourcePreviews(): Promise<SourcePreview[]> {
   return invoke<SourcePreview[]>("get_source_previews");
+}
+
+export function getModelSettingsStore(): Promise<ModelSettingsStore> {
+  return invoke<ModelSettingsStore>("get_model_settings_store");
+}
+
+export function saveModelSettingsStore(
+  store: ModelSettingsStore,
+): Promise<ModelSettingsStore> {
+  return invoke<ModelSettingsStore>("save_model_settings_store", { store });
+}
+
+export function getModelStatus(): Promise<ModelStatus> {
+  return invoke<ModelStatus>("get_model_status");
+}
+
+export function installDefaultAsrAssets(): Promise<ModelSettingsStore> {
+  return invoke<ModelSettingsStore>("install_default_asr_assets");
+}
+
+export function runAsrModelDiagnostic(): Promise<AsrDiagnosticResult> {
+  return invoke<AsrDiagnosticResult>("run_asr_model_diagnostic");
+}
+
+export function runCaptionFlowDiagnostic(): Promise<AsrDiagnosticResult> {
+  return invoke<AsrDiagnosticResult>("run_caption_flow_diagnostic");
+}
+
+export function getCaptionSettings(): Promise<CaptionSettings> {
+  return invoke<CaptionSettings>("get_caption_settings");
+}
+
+export function saveCaptionSettings(
+  settings: CaptionSettings,
+): Promise<CaptionSettings> {
+  return invoke<CaptionSettings>("save_caption_settings", { settings });
+}
+
+export function getTranslationSettings(): Promise<TranslationSettings> {
+  return invoke<TranslationSettings>("get_translation_settings");
+}
+
+export function saveTranslationSettings(
+  settings: TranslationSettings,
+): Promise<TranslationSettings> {
+  return invoke<TranslationSettings>("save_translation_settings", { settings });
+}
+
+export function getTranslationEngineStatus(): Promise<TranslationEngineStatus> {
+  return invoke<TranslationEngineStatus>("get_translation_engine_status");
+}
+
+export function runTranslationEngineDiagnostic(): Promise<TranslationDiagnosticResult> {
+  return invoke<TranslationDiagnosticResult>(
+    "run_translation_engine_diagnostic",
+  );
+}
+
+export function getPerformanceSettings(): Promise<PerformanceSettings> {
+  return invoke<PerformanceSettings>("get_performance_settings");
+}
+
+export function savePerformanceSettings(
+  settings: PerformanceSettings,
+): Promise<PerformanceSettings> {
+  return invoke<PerformanceSettings>("save_performance_settings", { settings });
+}
+
+export function getTranscriptSettings(): Promise<TranscriptSettings> {
+  return invoke<TranscriptSettings>("get_transcript_settings");
+}
+
+export function saveTranscriptSettings(
+  settings: TranscriptSettings,
+): Promise<TranscriptSettings> {
+  return invoke<TranscriptSettings>("save_transcript_settings", { settings });
+}
+
+export function startTranscriptSession(
+  sourceSummary: string,
+): Promise<number | null> {
+  return invoke<number | null>("start_transcript_session", { sourceSummary });
+}
+
+export function appendTranscriptSegment(
+  segment: TranscriptSegment,
+): Promise<void> {
+  return invoke<void>("append_transcript_segment", { segment });
+}
+
+export function finishTranscriptSession(): Promise<void> {
+  return invoke<void>("finish_transcript_session");
+}
+
+export function listTranscriptSessions(
+  limit = 20,
+): Promise<TranscriptSessionSummary[]> {
+  return invoke<TranscriptSessionSummary[]>("list_transcript_sessions", {
+    limit,
+  });
+}
+
+export function exportTranscriptSession(
+  sessionId: number,
+  format: TranscriptExportFormat,
+): Promise<string> {
+  return invoke<string>("export_transcript_session", { sessionId, format });
 }
 
 export function commandErrorMessage(error: unknown): string {

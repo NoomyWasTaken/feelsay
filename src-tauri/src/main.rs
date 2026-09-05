@@ -2,22 +2,166 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 fn main() {
+    if std::env::args().any(|arg| arg == "--asr-diagnostic") {
+        run_asr_diagnostic_command(AsrDiagnosticMode::Direct);
+        return;
+    }
+
+    if let Some(audio_path) = diagnostic_arg_value("--asr-file-diagnostic") {
+        run_asr_file_diagnostic_command(audio_path);
+        return;
+    }
+
+    if std::env::args().any(|arg| arg == "--asr-pipeline-diagnostic") {
+        run_asr_diagnostic_command(AsrDiagnosticMode::Pipeline);
+        return;
+    }
+
+    if std::env::args().any(|arg| arg == "--system-audio-asr-diagnostic") {
+        run_asr_diagnostic_command(AsrDiagnosticMode::SystemAudio);
+        return;
+    }
+
+    if std::env::args().any(|arg| arg == "--caption-flow-diagnostic") {
+        run_asr_diagnostic_command(AsrDiagnosticMode::CaptionFlow);
+        return;
+    }
+
     if std::env::args().any(|arg| arg == "--caption-placement-child") {
         let settings = overlay_settings_from_env();
         let placement_file =
             std::env::var_os("FEELSAY_OVERLAY_PLACEMENT_FILE").map(std::path::PathBuf::from);
-        run_caption_window_child(settings, placement_file, None);
+        run_caption_window_child(settings, placement_file, None, None);
         return;
     }
 
     if std::env::args().any(|arg| arg == "--caption-window-child") {
         let settings_file =
             std::env::var_os("FEELSAY_OVERLAY_SETTINGS_FILE").map(std::path::PathBuf::from);
-        run_caption_window_child(overlay_settings_from_env(), None, settings_file);
+        let caption_file =
+            std::env::var_os("FEELSAY_CAPTION_TEXT_FILE").map(std::path::PathBuf::from);
+        run_caption_window_child(
+            overlay_settings_from_env(),
+            None,
+            settings_file,
+            caption_file,
+        );
         return;
     }
 
     feelsay_lib::run()
+}
+
+fn diagnostic_arg_value(name: &str) -> Option<std::path::PathBuf> {
+    let mut args = std::env::args();
+
+    while let Some(arg) = args.next() {
+        if arg == name {
+            return args.next().map(std::path::PathBuf::from);
+        }
+    }
+
+    None
+}
+
+fn run_asr_file_diagnostic_command(audio_path: std::path::PathBuf) {
+    let data_dir = match app_data_dir() {
+        Ok(data_dir) => data_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+    let state = feelsay_lib::app_state::AppState::new(data_dir);
+    let config = match state.asr_runtime_config() {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            eprintln!("ASR model is not ready");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+
+    match feelsay_lib::asr::run_asr_file_diagnostic(config, audio_path) {
+        Ok(result) => println!("{}", result.text),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+enum AsrDiagnosticMode {
+    Direct,
+    Pipeline,
+    SystemAudio,
+    CaptionFlow,
+}
+
+fn run_asr_diagnostic_command(mode: AsrDiagnosticMode) {
+    let data_dir = match app_data_dir() {
+        Ok(data_dir) => data_dir,
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+    let state = feelsay_lib::app_state::AppState::new(data_dir);
+    let config = match state.asr_runtime_config() {
+        Ok(Some(config)) => config,
+        Ok(None) => {
+            eprintln!("ASR model is not ready");
+            std::process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    };
+
+    let result = match mode {
+        AsrDiagnosticMode::Direct => feelsay_lib::asr::run_asr_diagnostic(config),
+        AsrDiagnosticMode::Pipeline => feelsay_lib::asr::run_asr_pipeline_diagnostic(config),
+        AsrDiagnosticMode::SystemAudio => feelsay_lib::asr::run_system_audio_asr_diagnostic(config),
+        AsrDiagnosticMode::CaptionFlow => run_caption_flow_diagnostic(&state, config),
+    };
+
+    match result {
+        Ok(result) => println!("{}", result.text),
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
+}
+
+fn run_caption_flow_diagnostic(
+    state: &feelsay_lib::app_state::AppState,
+    config: feelsay_lib::asr::AsrRuntimeConfig,
+) -> Result<feelsay_lib::asr::AsrDiagnosticResult, feelsay_lib::app_error::AppError> {
+    state.open_caption_process()?;
+    let result = feelsay_lib::asr::run_system_audio_asr_diagnostic(config);
+    state
+        .close_caption_process()
+        .map_err(|error| feelsay_lib::app_error::AppError::Window(error.to_string()))?;
+    result
+}
+
+fn app_data_dir() -> Result<std::path::PathBuf, String> {
+    #[cfg(windows)]
+    {
+        let app_data = std::env::var_os("APPDATA")
+            .ok_or_else(|| "APPDATA is not set; cannot find Feelsay app data".to_string())?;
+        Ok(std::path::PathBuf::from(app_data).join("app.feelsay.desktop"))
+    }
+
+    #[cfg(not(windows))]
+    {
+        Err("ASR diagnostic CLI is Windows-only for now".to_string())
+    }
 }
 
 fn overlay_settings_from_env() -> feelsay_lib::overlay_settings::OverlaySettings {
@@ -35,6 +179,7 @@ fn run_caption_window_child(
     settings: feelsay_lib::overlay_settings::OverlaySettings,
     placement_file: Option<std::path::PathBuf>,
     settings_file: Option<std::path::PathBuf>,
+    caption_file: Option<std::path::PathBuf>,
 ) {
     use core::ffi::c_void;
     use feelsay_lib::overlay_settings::{hex_to_rgb, OverlayPlacement, OverlaySettings};
@@ -51,9 +196,9 @@ fn run_caption_window_child(
                 CreateSolidBrush, DeleteDC, DeleteObject, DrawTextW, Ellipse, EndPaint,
                 GetMonitorInfoW, MonitorFromWindow, SelectObject, SetBkMode, SetTextColor,
                 AC_SRC_ALPHA, AC_SRC_OVER, ANTIALIASED_QUALITY, BITMAPINFO, BI_RGB,
-                CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, DT_CENTER, DT_SINGLELINE,
-                DT_VCENTER, HDC, MONITORINFO, MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS,
-                PAINTSTRUCT, PS_SOLID, TRANSPARENT,
+                CLIP_DEFAULT_PRECIS, DEFAULT_CHARSET, DIB_RGB_COLORS, DRAW_TEXT_FORMAT, DT_CENTER,
+                DT_SINGLELINE, DT_VCENTER, DT_WORDBREAK, HDC, MONITORINFO,
+                MONITOR_DEFAULTTONEAREST, OUT_DEFAULT_PRECIS, PAINTSTRUCT, PS_SOLID, TRANSPARENT,
             },
             UI::WindowsAndMessaging::{
                 CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW, GetClientRect,
@@ -79,12 +224,20 @@ fn run_caption_window_child(
     const SET_BUTTON_MARGIN: i32 = 12;
     const SETTINGS_TIMER_ID: usize = 1;
     const SETTINGS_TIMER_MS: u32 = 100;
+    const CAPTION_STALE_MS: u64 = 4500;
 
     struct CaptionWindowState {
         settings: RefCell<OverlaySettings>,
         placement_file: Option<std::path::PathBuf>,
         settings_file: Option<std::path::PathBuf>,
         settings_modified: Cell<Option<SystemTime>>,
+        caption_text: RefCell<String>,
+        caption_source_label: RefCell<String>,
+        caption_speaker_label: RefCell<String>,
+        caption_speaker_confidence: Cell<Option<feelsay_lib::diarization::SpeakerLabelConfidence>>,
+        caption_updated_at_ms: Cell<u64>,
+        caption_file: Option<std::path::PathBuf>,
+        caption_modified: Cell<Option<SystemTime>>,
         snap_x_cursor: Cell<Option<i32>>,
         snap_y_cursor: Cell<Option<i32>>,
         snap_x_suppressed: Cell<bool>,
@@ -103,7 +256,7 @@ fn run_caption_window_child(
                 let state = unsafe { (*create_struct).lpCreateParams as *mut CaptionWindowState };
                 unsafe {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, state as isize);
-                    if (*state).settings_file.is_some() {
+                    if (*state).settings_file.is_some() || (*state).caption_file.is_some() {
                         let _ = SetTimer(Some(hwnd), SETTINGS_TIMER_ID, SETTINGS_TIMER_MS, None);
                     }
                 }
@@ -142,6 +295,7 @@ fn run_caption_window_child(
                 if wparam.0 == SETTINGS_TIMER_ID {
                     unsafe {
                         reload_settings_if_changed(hwnd);
+                        reload_caption_if_changed(hwnd);
                     }
                     return LRESULT(0);
                 }
@@ -274,47 +428,18 @@ fn run_caption_window_child(
         let pixels = std::slice::from_raw_parts_mut(bits as *mut u32, pixel_count);
         pixels.fill(BACKGROUND_MARKER);
 
-        let font_family: Vec<u16> = settings.font_family.encode_utf16().chain([0]).collect();
-        let font = CreateFontW(
-            -(settings.font_size as i32),
-            0,
-            0,
-            0,
-            settings.font_weight.win32_weight(),
-            0,
-            0,
-            0,
-            DEFAULT_CHARSET,
-            OUT_DEFAULT_PRECIS,
-            CLIP_DEFAULT_PRECIS,
-            ANTIALIASED_QUALITY,
-            0,
-            PCWSTR(font_family.as_ptr()),
-        );
-        let previous_font = SelectObject(hdc, font.into());
         SetBkMode(hdc, TRANSPARENT);
 
-        let format = DT_CENTER | DT_VCENTER | DT_SINGLELINE;
-        let text = "Live captions will appear here.";
+        let format = DT_CENTER | DT_VCENTER | DT_WORDBREAK;
+        let caption_text = state.caption_text.borrow();
+        let label = current_caption_status_label(state);
+        let text = if caption_is_stale(state.caption_updated_at_ms.get()) {
+            "Listening"
+        } else {
+            caption_text.as_str()
+        };
 
-        if settings.outline_width > 0 {
-            SetTextColor(hdc, color_ref(&settings.outline_color));
-            let outline_width = settings.outline_width as i32;
-            for x in -outline_width..=outline_width {
-                for y in -outline_width..=outline_width {
-                    if x == 0 && y == 0 {
-                        continue;
-                    }
-                    let mut outline_rect = offset_rect(rect, x, y);
-                    let mut outline_text: Vec<u16> = text.encode_utf16().collect();
-                    DrawTextW(hdc, &mut outline_text, &mut outline_rect, format);
-                }
-            }
-        }
-
-        SetTextColor(hdc, color_ref(&settings.text_color));
-        let mut caption_text: Vec<u16> = text.encode_utf16().collect();
-        DrawTextW(hdc, &mut caption_text, &mut rect, format);
+        draw_caption_content(hdc, label.as_str(), text, rect, &settings, format);
 
         if state.placement_file.is_some() {
             draw_set_button(hdc, rect);
@@ -358,9 +483,7 @@ fn run_caption_window_child(
             ULW_ALPHA,
         );
 
-        SelectObject(hdc, previous_font);
         SelectObject(hdc, previous_bitmap);
-        let _ = DeleteObject(font.into());
         let _ = DeleteObject(bitmap.into());
         let _ = DeleteDC(hdc);
     }
@@ -399,6 +522,119 @@ fn run_caption_window_child(
         state.settings_modified.set(Some(modified));
         apply_window_settings(hwnd);
         render_caption(hwnd);
+    }
+
+    unsafe fn reload_caption_if_changed(hwnd: HWND) {
+        let Some(state) = caption_state(hwnd) else {
+            return;
+        };
+        let Some(path) = state.caption_file.as_ref() else {
+            return;
+        };
+        let Ok(metadata) = std::fs::metadata(path) else {
+            return;
+        };
+        let Ok(modified) = metadata.modified() else {
+            return;
+        };
+
+        if state.caption_modified.get() == Some(modified) {
+            return;
+        }
+
+        let Ok(content) = std::fs::read_to_string(path) else {
+            return;
+        };
+        let Ok(caption) = serde_json::from_str::<feelsay_lib::asr::CaptionRuntimeState>(&content)
+        else {
+            return;
+        };
+
+        state.caption_text.replace(current_caption_text(&caption));
+        state
+            .caption_source_label
+            .replace(current_caption_source_label(&caption));
+        state
+            .caption_speaker_label
+            .replace(current_caption_speaker_label(&caption));
+        state
+            .caption_speaker_confidence
+            .set(caption.speaker_confidence);
+        state.caption_updated_at_ms.set(caption.updated_at_ms);
+        state.caption_modified.set(Some(modified));
+        render_caption(hwnd);
+    }
+
+    fn current_caption_text(caption: &feelsay_lib::asr::CaptionRuntimeState) -> String {
+        let text = if !caption.provisional_text.trim().is_empty() {
+            caption.provisional_text.trim()
+        } else if !caption.committed_text.trim().is_empty() {
+            caption.committed_text.trim()
+        } else {
+            caption.text.trim()
+        };
+
+        if text.is_empty() {
+            "Listening".to_string()
+        } else {
+            text.to_string()
+        }
+    }
+
+    fn current_caption_source_label(caption: &feelsay_lib::asr::CaptionRuntimeState) -> String {
+        caption
+            .source_label
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    fn current_caption_speaker_label(caption: &feelsay_lib::asr::CaptionRuntimeState) -> String {
+        caption
+            .speaker_label
+            .as_deref()
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    }
+
+    fn current_caption_status_label(hwnd_state: &CaptionWindowState) -> String {
+        let source_label = hwnd_state.caption_source_label.borrow();
+        let speaker_label = hwnd_state.caption_speaker_label.borrow();
+        let speaker_label = speaker_label.trim();
+
+        if speaker_label.is_empty() {
+            return source_label.trim().to_string();
+        }
+
+        let speaker_label = match hwnd_state.caption_speaker_confidence.get() {
+            Some(confidence) => format!(
+                "{} ({})",
+                speaker_label,
+                feelsay_lib::diarization::speaker_confidence_label(confidence)
+            ),
+            None => speaker_label.to_string(),
+        };
+        let source_label = source_label.trim();
+
+        if source_label.is_empty() {
+            speaker_label
+        } else {
+            format!("{source_label} - {speaker_label}")
+        }
+    }
+
+    fn caption_is_stale(updated_at_ms: u64) -> bool {
+        updated_at_ms != 0
+            && current_timestamp_ms().saturating_sub(updated_at_ms) > CAPTION_STALE_MS
+    }
+
+    fn current_timestamp_ms() -> u64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_millis().min(u128::from(u64::MAX)) as u64)
+            .unwrap_or(0)
     }
 
     unsafe fn apply_window_settings(hwnd: HWND) {
@@ -696,6 +932,149 @@ fn run_caption_window_child(
         }
     }
 
+    unsafe fn draw_caption_content(
+        hdc: HDC,
+        source_label: &str,
+        text: &str,
+        rect: RECT,
+        settings: &OverlaySettings,
+        format: DRAW_TEXT_FORMAT,
+    ) {
+        let source_label = source_label.trim();
+        if source_label.is_empty() {
+            draw_caption_lines(hdc, text, rect, settings, format);
+            return;
+        }
+
+        let height = rect.bottom - rect.top;
+        let label_height = ((settings.font_size as f32 * 0.7).round() as i32).clamp(18, 34);
+        let gap = 4;
+        let label_rect = RECT {
+            left: rect.left,
+            top: rect.top + (height / 10).min(16),
+            right: rect.right,
+            bottom: rect.top + (height / 10).min(16) + label_height,
+        };
+        let caption_rect = RECT {
+            left: rect.left,
+            top: label_rect.bottom + gap,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        let label_size = ((settings.font_size as f32) * 0.42)
+            .round()
+            .clamp(14.0, 24.0) as u32;
+
+        draw_caption_text(
+            hdc,
+            source_label,
+            label_rect,
+            settings,
+            label_size,
+            DT_CENTER | DT_VCENTER | DT_SINGLELINE,
+        );
+        draw_caption_lines(hdc, text, caption_rect, settings, format);
+    }
+
+    unsafe fn draw_caption_lines(
+        hdc: HDC,
+        text: &str,
+        rect: RECT,
+        settings: &OverlaySettings,
+        format: DRAW_TEXT_FORMAT,
+    ) {
+        if let Some((original, translation)) = text.split_once('\n') {
+            let midpoint = rect.top + (rect.bottom - rect.top) / 2;
+            let gap = 4;
+            let original_rect = RECT {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: midpoint - gap,
+            };
+            let translation_rect = RECT {
+                left: rect.left,
+                top: midpoint + gap,
+                right: rect.right,
+                bottom: rect.bottom,
+            };
+            let original_size = ((settings.font_size as f32) * settings.original_line_scale)
+                .round()
+                .clamp(18.0, settings.font_size as f32) as u32;
+
+            draw_caption_text(
+                hdc,
+                original,
+                original_rect,
+                settings,
+                original_size,
+                format,
+            );
+            draw_caption_text(
+                hdc,
+                translation,
+                translation_rect,
+                settings,
+                settings.font_size,
+                format,
+            );
+            return;
+        }
+
+        draw_caption_text(hdc, text, rect, settings, settings.font_size, format);
+    }
+
+    unsafe fn draw_caption_text(
+        hdc: HDC,
+        text: &str,
+        rect: RECT,
+        settings: &OverlaySettings,
+        font_size: u32,
+        format: DRAW_TEXT_FORMAT,
+    ) {
+        let font_family: Vec<u16> = settings.font_family.encode_utf16().chain([0]).collect();
+        let font = CreateFontW(
+            -(font_size as i32),
+            0,
+            0,
+            0,
+            settings.font_weight.win32_weight(),
+            0,
+            0,
+            0,
+            DEFAULT_CHARSET,
+            OUT_DEFAULT_PRECIS,
+            CLIP_DEFAULT_PRECIS,
+            ANTIALIASED_QUALITY,
+            0,
+            PCWSTR(font_family.as_ptr()),
+        );
+        let previous_font = SelectObject(hdc, font.into());
+
+        if settings.outline_width > 0 {
+            SetTextColor(hdc, color_ref(&settings.outline_color));
+            let outline_width = settings.outline_width as i32;
+            for x in -outline_width..=outline_width {
+                for y in -outline_width..=outline_width {
+                    if x == 0 && y == 0 {
+                        continue;
+                    }
+                    let mut outline_rect = offset_rect(rect, x, y);
+                    let mut outline_text: Vec<u16> = text.encode_utf16().collect();
+                    DrawTextW(hdc, &mut outline_text, &mut outline_rect, format);
+                }
+            }
+        }
+
+        SetTextColor(hdc, color_ref(&settings.text_color));
+        let mut caption_text: Vec<u16> = text.encode_utf16().collect();
+        let mut text_rect = rect;
+        DrawTextW(hdc, &mut caption_text, &mut text_rect, format);
+
+        SelectObject(hdc, previous_font);
+        let _ = DeleteObject(font.into());
+    }
+
     unsafe {
         let class_name = w!("FeelSayCaptionWindowChild");
         let window_class = WNDCLASSW {
@@ -714,11 +1093,59 @@ fn run_caption_window_child(
             .as_ref()
             .and_then(|path| std::fs::metadata(path).ok())
             .and_then(|metadata| metadata.modified().ok());
+        let caption_modified = caption_file
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .and_then(|metadata| metadata.modified().ok());
+        let caption_text = caption_file
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|content| {
+                serde_json::from_str::<feelsay_lib::asr::CaptionRuntimeState>(&content).ok()
+            })
+            .map(|caption| current_caption_text(&caption))
+            .filter(|text| !text.trim().is_empty())
+            .unwrap_or_else(|| "Listening".to_string());
+        let caption_source_label = caption_file
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|content| {
+                serde_json::from_str::<feelsay_lib::asr::CaptionRuntimeState>(&content).ok()
+            })
+            .map(|caption| current_caption_source_label(&caption))
+            .unwrap_or_default();
+        let caption_speaker = caption_file
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|content| {
+                serde_json::from_str::<feelsay_lib::asr::CaptionRuntimeState>(&content).ok()
+            });
+        let caption_speaker_label = caption_speaker
+            .as_ref()
+            .map(current_caption_speaker_label)
+            .unwrap_or_default();
+        let caption_speaker_confidence =
+            caption_speaker.and_then(|caption| caption.speaker_confidence);
+        let caption_updated_at_ms = caption_file
+            .as_ref()
+            .and_then(|path| std::fs::read_to_string(path).ok())
+            .and_then(|content| {
+                serde_json::from_str::<feelsay_lib::asr::CaptionRuntimeState>(&content).ok()
+            })
+            .map(|caption| caption.updated_at_ms)
+            .unwrap_or(0);
         let state = Box::into_raw(Box::new(CaptionWindowState {
             settings: RefCell::new(settings),
             placement_file,
             settings_file,
             settings_modified: Cell::new(settings_modified),
+            caption_text: RefCell::new(caption_text),
+            caption_source_label: RefCell::new(caption_source_label),
+            caption_speaker_label: RefCell::new(caption_speaker_label),
+            caption_speaker_confidence: Cell::new(caption_speaker_confidence),
+            caption_updated_at_ms: Cell::new(caption_updated_at_ms),
+            caption_file,
+            caption_modified: Cell::new(caption_modified),
             snap_x_cursor: Cell::new(None),
             snap_y_cursor: Cell::new(None),
             snap_x_suppressed: Cell::new(false),
@@ -779,6 +1206,7 @@ fn run_caption_window_child(
     _settings: feelsay_lib::overlay_settings::OverlaySettings,
     _placement_file: Option<std::path::PathBuf>,
     _settings_file: Option<std::path::PathBuf>,
+    _caption_file: Option<std::path::PathBuf>,
 ) {
     eprintln!("caption window child process is Windows-only for now");
 }

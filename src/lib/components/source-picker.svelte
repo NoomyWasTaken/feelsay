@@ -123,6 +123,10 @@
   }
 
   function toggleApplication(applicationId: string) {
+    if (!sources.find((source) => source.id === applicationId)?.isAvailable) {
+      return;
+    }
+
     activeTab = "applications";
     selectedSystemSourceId = "";
     selectedDeviceId = "";
@@ -170,6 +174,33 @@
 
   function deviceKindLabel(source: AudioSource): string {
     return source.kind === "output_device" ? "Output" : "Microphone";
+  }
+
+  function sourcePrimaryLabel(source: AudioSource): string {
+    return (
+      source.metadata?.appName ??
+      source.metadata?.processName?.replace(/\.exe$/i, "") ??
+      source.displayName
+    );
+  }
+
+  function sourceSecondaryLabel(source: AudioSource): string {
+    const title = source.metadata?.windowTitle ?? source.displayName;
+    const process = source.metadata?.processName;
+
+    if (title !== sourcePrimaryLabel(source)) {
+      return title;
+    }
+
+    return process ?? "Window";
+  }
+
+  function sourceActionLabel(source: AudioSource): string {
+    if (!source.isAvailable) {
+      return "Use system audio";
+    }
+
+    return selectedApplications.includes(source.id) ? "Selected" : "Select";
   }
 
   function buildDraftSelection(
@@ -240,8 +271,10 @@
             {#each applicationSources as source}
               <button
                 class:selected={selectedApplications.includes(source.id)}
+                class:unsupported={!source.isAvailable}
                 class="application-tile"
                 type="button"
+                disabled={!source.isAvailable}
                 aria-pressed={selectedApplications.includes(source.id)}
                 onclick={() => toggleApplication(source.id)}
               >
@@ -250,11 +283,12 @@
                   preview={previewFor(source)}
                 />
                 <span class="tile-footer">
-                  <span>{source.displayName}</span>
+                  <span class="tile-title">{sourcePrimaryLabel(source)}</span>
+                  <span class="tile-subtitle"
+                    >{sourceSecondaryLabel(source)}</span
+                  >
                   <span class="selection-mark" aria-hidden="true">
-                    {selectedApplications.includes(source.id)
-                      ? "Selected"
-                      : "Select"}
+                    {sourceActionLabel(source)}
                   </span>
                 </span>
               </button>
@@ -475,6 +509,16 @@
     background: var(--bgColor-accent-muted);
   }
 
+  .application-tile.unsupported {
+    cursor: default;
+    opacity: 0.62;
+  }
+
+  .application-tile.unsupported:hover {
+    border-color: var(--borderColor-default);
+    background: var(--bgColor-muted);
+  }
+
   .application-tile {
     display: grid;
     gap: 10px;
@@ -492,10 +536,20 @@
     min-width: 0;
   }
 
-  .tile-footer span:first-child {
+  .tile-title,
+  .tile-subtitle {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .tile-title {
+    font-weight: 800;
+  }
+
+  .tile-subtitle {
+    color: var(--fgColor-muted);
+    font-size: 0.78rem;
   }
 
   .selection-mark {

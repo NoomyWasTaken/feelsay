@@ -1,10 +1,21 @@
 use crate::{
     app_error::{AppError, CommandResult},
     app_state::AppState,
+    asr::{run_asr_diagnostic, run_system_audio_asr_diagnostic, AsrDiagnosticResult},
+    caption_settings::CaptionSettings,
+    model_settings::{ModelSettingsStore, ModelStatus},
     overlay_settings::{OverlayPlacement, OverlayProfileId, OverlaySettings, OverlaySettingsStore},
+    performance_settings::PerformanceSettings,
     platform,
     platform::{PlatformCapabilityProvider, SourceEnumerator, SourcePreviewProvider},
     source::{AudioSource, PlatformCapabilities, SourcePreview},
+    transcript::{
+        TranscriptExportFormat, TranscriptSegment, TranscriptSessionSummary, TranscriptSettings,
+    },
+    translation::{
+        run_translation_diagnostic, TranslationDiagnosticResult, TranslationEngineStatus,
+        TranslationSettings,
+    },
 };
 use serde::Serialize;
 use tauri::{AppHandle, State};
@@ -18,12 +29,27 @@ pub struct AppStatus {
 }
 
 #[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AppMetadata {
+    pub product_name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SessionState {
     Idle,
     Starting,
     Listening,
     Error,
+}
+
+#[tauri::command]
+pub fn get_app_metadata() -> AppMetadata {
+    AppMetadata {
+        product_name: "FeelSay".to_string(),
+        version: env!("CARGO_PKG_VERSION").to_string(),
+    }
 }
 
 #[tauri::command]
@@ -40,8 +66,13 @@ pub fn start_audio_meter(
     app: AppHandle,
     state: State<'_, AppState>,
     source_ids: Vec<String>,
+    source_label: Option<String>,
 ) -> CommandResult<()> {
-    state.audio_meter().start_mock_meter(app, source_ids)?;
+    let asr_config = state.asr_runtime_config_for_source(source_label)?;
+
+    state
+        .audio_meter()
+        .start_mock_meter(app, source_ids, asr_config)?;
     Ok(())
 }
 
@@ -144,4 +175,164 @@ pub fn list_available_sources() -> CommandResult<Vec<AudioSource>> {
 #[tauri::command]
 pub fn get_source_previews() -> CommandResult<Vec<SourcePreview>> {
     Ok(platform::current_provider().source_previews()?)
+}
+
+#[tauri::command]
+pub fn get_model_settings_store(state: State<'_, AppState>) -> CommandResult<ModelSettingsStore> {
+    Ok(state.model_settings().load()?)
+}
+
+#[tauri::command]
+pub fn save_model_settings_store(
+    state: State<'_, AppState>,
+    store: ModelSettingsStore,
+) -> CommandResult<ModelSettingsStore> {
+    Ok(state.model_settings().save(store)?)
+}
+
+#[tauri::command]
+pub fn get_model_status(state: State<'_, AppState>) -> CommandResult<ModelStatus> {
+    Ok(state.model_settings().status()?)
+}
+
+#[tauri::command]
+pub fn install_default_asr_assets(state: State<'_, AppState>) -> CommandResult<ModelSettingsStore> {
+    Ok(state.model_settings().install_default_assets()?)
+}
+
+#[tauri::command]
+pub fn run_asr_model_diagnostic(state: State<'_, AppState>) -> CommandResult<AsrDiagnosticResult> {
+    let Some(config) = state.asr_runtime_config()? else {
+        return Err(AppError::Asr("ASR model is not ready".to_string()).into());
+    };
+
+    Ok(run_asr_diagnostic(config)?)
+}
+
+#[tauri::command]
+pub fn run_caption_flow_diagnostic(
+    state: State<'_, AppState>,
+) -> CommandResult<AsrDiagnosticResult> {
+    let Some(config) = state.asr_runtime_config()? else {
+        return Err(AppError::Asr("ASR model is not ready".to_string()).into());
+    };
+
+    state.open_caption_process()?;
+    let result = run_system_audio_asr_diagnostic(config);
+    state
+        .close_caption_process()
+        .map_err(|error| AppError::Window(error.to_string()))?;
+
+    Ok(result?)
+}
+
+#[tauri::command]
+pub fn get_caption_settings(state: State<'_, AppState>) -> CommandResult<CaptionSettings> {
+    Ok(state.caption_settings().load()?)
+}
+
+#[tauri::command]
+pub fn save_caption_settings(
+    state: State<'_, AppState>,
+    settings: CaptionSettings,
+) -> CommandResult<CaptionSettings> {
+    Ok(state.caption_settings().save(settings)?)
+}
+
+#[tauri::command]
+pub fn get_translation_settings(state: State<'_, AppState>) -> CommandResult<TranslationSettings> {
+    Ok(state.translation_settings().load()?)
+}
+
+#[tauri::command]
+pub fn save_translation_settings(
+    state: State<'_, AppState>,
+    settings: TranslationSettings,
+) -> CommandResult<TranslationSettings> {
+    Ok(state.translation_settings().save(settings)?)
+}
+
+#[tauri::command]
+pub fn get_translation_engine_status(state: State<'_, AppState>) -> TranslationEngineStatus {
+    state.translation_settings().status()
+}
+
+#[tauri::command]
+pub fn run_translation_engine_diagnostic(
+    state: State<'_, AppState>,
+) -> CommandResult<TranslationDiagnosticResult> {
+    let caption_settings = state.caption_settings().load()?;
+    let translation_settings = state.translation_settings().load()?;
+
+    Ok(run_translation_diagnostic(
+        translation_settings,
+        caption_settings.translation_source_language,
+        caption_settings.translation_target_language,
+    )?)
+}
+
+#[tauri::command]
+pub fn get_performance_settings(state: State<'_, AppState>) -> CommandResult<PerformanceSettings> {
+    Ok(state.performance_settings().load()?)
+}
+
+#[tauri::command]
+pub fn save_performance_settings(
+    state: State<'_, AppState>,
+    settings: PerformanceSettings,
+) -> CommandResult<PerformanceSettings> {
+    Ok(state.performance_settings().save(settings)?)
+}
+
+#[tauri::command]
+pub fn get_transcript_settings(state: State<'_, AppState>) -> CommandResult<TranscriptSettings> {
+    Ok(state.transcripts().load_settings()?)
+}
+
+#[tauri::command]
+pub fn save_transcript_settings(
+    state: State<'_, AppState>,
+    settings: TranscriptSettings,
+) -> CommandResult<TranscriptSettings> {
+    Ok(state.transcripts().save_settings(settings)?)
+}
+
+#[tauri::command]
+pub fn start_transcript_session(
+    state: State<'_, AppState>,
+    source_summary: String,
+) -> CommandResult<Option<i64>> {
+    Ok(state.transcripts().start_session(source_summary)?)
+}
+
+#[tauri::command]
+pub fn append_transcript_segment(
+    state: State<'_, AppState>,
+    segment: TranscriptSegment,
+) -> CommandResult<()> {
+    state.transcripts().append_segment(segment)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn finish_transcript_session(state: State<'_, AppState>) -> CommandResult<()> {
+    state.transcripts().finish_session()?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn list_transcript_sessions(
+    state: State<'_, AppState>,
+    limit: u32,
+) -> CommandResult<Vec<TranscriptSessionSummary>> {
+    Ok(state.transcripts().list_sessions(limit)?)
+}
+
+#[tauri::command]
+pub fn export_transcript_session(
+    state: State<'_, AppState>,
+    session_id: i64,
+    format: TranscriptExportFormat,
+) -> CommandResult<String> {
+    Ok(state.transcripts().export_session(session_id, format)?)
 }

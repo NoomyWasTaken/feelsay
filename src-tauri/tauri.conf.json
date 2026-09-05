@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "Feelsay",
+  "productName": "FeelSay",
   "version": "0.1.0",
   "identifier": "app.feelsay.desktop",
   "build": {

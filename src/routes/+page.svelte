@@ -4,15 +4,26 @@
   import AppTitlebar from "$lib/components/app-titlebar.svelte";
   import OverlaySettingsPanel from "$lib/components/overlay-settings-panel.svelte";
   import SourcePicker from "$lib/components/source-picker.svelte";
+  import type {
+    CaptionMode,
+    CaptionSettings,
+  } from "$lib/domain/caption-settings";
+  import { formatTranslationLanguage } from "$lib/domain/caption-settings";
   import type { AudioLevelEvent } from "$lib/domain/audio-meter";
+  import type { ModelStatus } from "$lib/domain/model-settings";
   import type { SourceSelection } from "$lib/domain/source-selection";
   import {
     closeCaptionWindow,
     commandErrorMessage,
+    getCaptionSettings,
+    getModelStatus,
     isCaptionWindowOpen,
     openCaptionWindow,
+    saveCaptionSettings,
     startAudioMeter,
+    startTranscriptSession,
     stopAudioMeter,
+    finishTranscriptSession,
   } from "$lib/tauri/commands";
 
   type CaptionFlowState =
@@ -23,16 +34,21 @@
     | { status: "error"; message: string };
 
   let captionFlowState = $state<CaptionFlowState>({ status: "idle" });
+  let captionSettings = $state<CaptionSettings | null>(null);
+  let modelStatus = $state<ModelStatus | null>(null);
   let selectedSource = $state<SourceSelection | null>(null);
   let meterState = $state<AudioLevelEvent>({
     level: 0,
     status: "idle",
     sourceIds: [],
     isMock: true,
+    speechDetected: false,
   });
   let isSourcePickerOpen = $state(false);
   let isSettingsOpen = $state(false);
+  let isOverlayVisible = $state(false);
   let unlistenAudioLevel: UnlistenFn | undefined;
+  let unlistenControls: UnlistenFn[] = [];
   let captionWindowPoll: ReturnType<typeof setInterval> | undefined;
 
   let isBusy = $derived(
@@ -47,19 +63,51 @@
   let statusMessage = $derived(
     captionFlowState.status === "error" ? captionFlowState.message : "",
   );
+  let needsMultilingualModel = $derived(
+    isTranslationMode(captionSettings?.mode) &&
+      modelStatus?.activeModel?.supportsTranslation === false,
+  );
   let meterPercent = $derived(Math.round(meterState.level * 100));
-  let meterLabel = $derived(getMeterLabel(meterState.status));
+  let meterLabel = $derived(
+    isCaptioning && !isOverlayVisible
+      ? "Overlay hidden"
+      : getMeterLabel(meterState),
+  );
+  let translationTargetLabel = $derived(
+    formatTranslationLanguage(captionSettings?.translationTargetLanguage),
+  );
 
   onMount(() => {
+    void loadCaptionSettings();
+    void loadModelStatus();
+
     void listen<AudioLevelEvent>("audio-level", (event) => {
       meterState = event.payload;
     }).then((unlisten) => {
       unlistenAudioLevel = unlisten;
     });
 
+    void Promise.all([
+      listen("control-toggle-captions", () => {
+        void handlePrimaryAction();
+      }),
+      listen("control-toggle-overlay", () => {
+        void toggleOverlayVisibility();
+      }),
+      listen("control-open-settings", () => {
+        isSettingsOpen = true;
+      }),
+      listen<boolean>("control-click-through-toggled", () => {
+        // Settings reload on next open; running overlay reads the runtime file.
+      }),
+    ]).then((unlisten) => {
+      unlistenControls = unlisten;
+    });
+
     return () => {
       stopCaptionWindowPolling();
       cleanupMeter();
+      cleanupControls();
     };
   });
 
@@ -79,16 +127,64 @@
     return "Start";
   }
 
-  function getMeterLabel(status: AudioLevelEvent["status"]): string {
-    if (status === "active") {
-      return "Active · mock";
+  function getMeterLabel(state: AudioLevelEvent): string {
+    if (state.status === "error") {
+      return state.message ?? "Audio error";
     }
 
-    if (status === "starting") {
-      return "Starting · mock";
+    if (state.status === "active") {
+      if (state.isMock) {
+        return "Active - test";
+      }
+
+      return state.speechDetected ? "Speech" : "Silence";
     }
 
-    return "Ready · mock";
+    if (state.status === "starting") {
+      return "Starting";
+    }
+
+    return "Ready";
+  }
+
+  async function loadCaptionSettings() {
+    try {
+      captionSettings = await getCaptionSettings();
+    } catch (error) {
+      captionFlowState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function loadModelStatus() {
+    try {
+      modelStatus = await getModelStatus();
+    } catch {
+      modelStatus = null;
+    }
+  }
+
+  function isTranslationMode(mode: CaptionMode | undefined): boolean {
+    return mode === "translate" || mode === "original_and_translation";
+  }
+
+  async function updateCaptionMode(mode: CaptionMode) {
+    if (!captionSettings) {
+      return;
+    }
+
+    captionSettings = { ...captionSettings, mode };
+
+    try {
+      captionSettings = await saveCaptionSettings(captionSettings);
+    } catch (error) {
+      captionFlowState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
   }
 
   function applySourceSelection(selection: SourceSelection) {
@@ -98,6 +194,7 @@
       status: "idle",
       sourceIds: getSourceIds(selection),
       isMock: true,
+      speechDetected: false,
     };
     isSourcePickerOpen = false;
 
@@ -121,14 +218,21 @@
     }
 
     captionFlowState = { status: "starting" };
+    await loadModelStatus();
 
     try {
-      await startAudioMeter(getSourceIds(selectedSource));
+      await startTranscriptSession(selectedSource.displayLabel);
+      await startAudioMeter(
+        getSourceIds(selectedSource),
+        selectedSource.displayLabel,
+      );
       await openCaptionWindow();
+      isOverlayVisible = true;
       startCaptionWindowPolling();
       captionFlowState = { status: "captioning" };
     } catch (error) {
       await stopAudioMeter();
+      await finishTranscriptSession();
       captionFlowState = {
         status: "error",
         message: commandErrorMessage(error),
@@ -141,8 +245,10 @@
 
     try {
       await closeCaptionWindow();
+      isOverlayVisible = false;
       stopCaptionWindowPolling();
       await stopAudioMeter();
+      await finishTranscriptSession();
       captionFlowState = { status: "idle" };
     } catch (error) {
       captionFlowState = {
@@ -166,6 +272,14 @@
     unlistenAudioLevel?.();
     unlistenAudioLevel = undefined;
     void stopAudioMeter();
+  }
+
+  function cleanupControls() {
+    for (const unlisten of unlistenControls) {
+      unlisten();
+    }
+
+    unlistenControls = [];
   }
 
   function startCaptionWindowPolling() {
@@ -193,10 +307,40 @@
       }
 
       stopCaptionWindowPolling();
+      isOverlayVisible = false;
       await stopAudioMeter();
+      await finishTranscriptSession();
       captionFlowState = { status: "idle" };
     } catch (error) {
       stopCaptionWindowPolling();
+      captionFlowState = {
+        status: "error",
+        message: commandErrorMessage(error),
+      };
+    }
+  }
+
+  async function toggleOverlayVisibility() {
+    if (captionFlowState.status !== "captioning") {
+      captionFlowState = {
+        status: "error",
+        message: "Start captions before hiding the overlay.",
+      };
+      return;
+    }
+
+    try {
+      if (await isCaptionWindowOpen()) {
+        await closeCaptionWindow();
+        stopCaptionWindowPolling();
+        isOverlayVisible = false;
+        return;
+      }
+
+      await openCaptionWindow();
+      isOverlayVisible = true;
+      startCaptionWindowPolling();
+    } catch (error) {
       captionFlowState = {
         status: "error",
         message: commandErrorMessage(error),
@@ -230,6 +374,31 @@
       <p class="source-summary" aria-live="polite">
         {selectedSource?.displayLabel ?? "No source selected"}
       </p>
+
+      {#if captionSettings}
+        <label class="mode-select">
+          <span>Mode</span>
+          <select
+            value={captionSettings.mode}
+            disabled={isCaptioning || isBusy}
+            onchange={(event) =>
+              void updateCaptionMode(event.currentTarget.value as CaptionMode)}
+          >
+            <option value="captions">Captions</option>
+            <option value="translate"
+              >Translate to {translationTargetLabel}</option
+            >
+            <option value="original_and_translation"
+              >Original + {translationTargetLabel}</option
+            >
+          </select>
+        </label>
+        {#if needsMultilingualModel}
+          <p class="mode-warning">
+            Translation needs a multilingual model in Settings.
+          </p>
+        {/if}
+      {/if}
 
       {#if selectedSource}
         <div class="meter-stack">
@@ -281,7 +450,13 @@
     {/if}
 
     {#if isSettingsOpen}
-      <OverlaySettingsPanel onClose={() => (isSettingsOpen = false)} />
+      <OverlaySettingsPanel
+        onClose={() => {
+          isSettingsOpen = false;
+          void loadCaptionSettings();
+          void loadModelStatus();
+        }}
+      />
     {/if}
   </main>
 </div>
@@ -363,6 +538,38 @@
     color: var(--fgColor-muted);
     font-size: 0.9375rem;
     overflow-wrap: anywhere;
+  }
+
+  .mode-select {
+    display: grid;
+    width: 180px;
+    gap: 6px;
+    color: var(--fgColor-muted);
+    font-size: 0.75rem;
+    text-align: left;
+  }
+
+  .mode-select select {
+    min-height: 36px;
+    box-sizing: border-box;
+    border: 1px solid var(--borderColor-muted);
+    border-radius: var(--radius-default);
+    background: var(--bgColor-muted);
+    color: var(--fgColor-default);
+    font: inherit;
+    font-size: 0.875rem;
+    cursor: pointer;
+  }
+
+  .mode-select select:disabled {
+    cursor: default;
+    opacity: 0.55;
+  }
+
+  .mode-warning {
+    max-width: 28ch;
+    color: oklch(78% 0.14 84);
+    font-size: 0.75rem;
   }
 
   .audio-meter {
@@ -455,6 +662,7 @@
 
     .select-source-button,
     .primary-action,
+    .mode-select,
     .audio-meter,
     .meter-stack {
       width: 100%;

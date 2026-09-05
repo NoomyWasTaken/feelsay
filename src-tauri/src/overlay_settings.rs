@@ -230,6 +230,8 @@ pub struct OverlaySettings {
     pub font_family: String,
     pub font_size: u32,
     pub font_weight: FontWeight,
+    #[serde(default = "default_original_line_scale")]
+    pub original_line_scale: f32,
     pub text_color: String,
     pub background_color: String,
     pub background_opacity: f32,
@@ -271,6 +273,7 @@ impl Default for OverlaySettings {
             font_family: "Segoe UI".to_string(),
             font_size: 42,
             font_weight: FontWeight::Bold,
+            original_line_scale: default_original_line_scale(),
             text_color: "#ffffff".to_string(),
             background_color: "#000000".to_string(),
             background_opacity: 0.47,
@@ -291,6 +294,7 @@ impl OverlaySettings {
 
         self.font_family = normalize_font_family(&self.font_family, &defaults.font_family);
         self.font_size = self.font_size.clamp(18, 96);
+        self.original_line_scale = self.original_line_scale.clamp(0.6, 1.0);
         self.text_color = normalize_color(&self.text_color).unwrap_or(defaults.text_color);
         self.background_color =
             normalize_color(&self.background_color).unwrap_or(defaults.background_color);
@@ -302,6 +306,10 @@ impl OverlaySettings {
 
         self
     }
+}
+
+fn default_original_line_scale() -> f32 {
+    0.78
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

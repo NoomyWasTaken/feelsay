@@ -1,6 +1,12 @@
 use crate::{
+    asr::{write_caption_state, AsrRuntimeConfig},
     audio_capture::AudioMeterService,
+    caption_settings::{CaptionMode, CaptionSettingsService},
+    model_settings::ModelSettingsService,
     overlay_settings::{OverlayPlacement, OverlaySettings, OverlaySettingsService},
+    performance_settings::PerformanceSettingsService,
+    transcript::TranscriptService,
+    translation::{TranslationRuntimeConfig, TranslationSettingsService},
 };
 use std::{
     fs, io,
@@ -11,23 +17,35 @@ use std::{
 
 pub struct AppState {
     audio_meter_service: AudioMeterService,
+    caption_settings_service: CaptionSettingsService,
+    model_settings_service: ModelSettingsService,
     overlay_settings_service: OverlaySettingsService,
+    performance_settings_service: PerformanceSettingsService,
+    transcript_service: TranscriptService,
+    translation_settings_service: TranslationSettingsService,
     caption_process: Mutex<Option<Child>>,
     placement_process: Mutex<Option<Child>>,
     placement_file: PathBuf,
+    caption_file: PathBuf,
 }
 
 impl AppState {
     pub fn new(data_dir: PathBuf) -> Self {
         Self {
             audio_meter_service: AudioMeterService::default(),
-            overlay_settings_service: OverlaySettingsService::new(data_dir),
+            caption_settings_service: CaptionSettingsService::new(data_dir.clone()),
+            model_settings_service: ModelSettingsService::new(data_dir.clone()),
+            overlay_settings_service: OverlaySettingsService::new(data_dir.clone()),
+            performance_settings_service: PerformanceSettingsService::new(data_dir.clone()),
+            transcript_service: TranscriptService::new(data_dir.clone()),
+            translation_settings_service: TranslationSettingsService::new(data_dir.clone()),
             caption_process: Mutex::new(None),
             placement_process: Mutex::new(None),
             placement_file: std::env::temp_dir().join(format!(
                 "feelsay-overlay-placement-{}.json",
                 std::process::id()
             )),
+            caption_file: data_dir.join("caption-runtime.json"),
         }
     }
 
@@ -35,8 +53,94 @@ impl AppState {
         &self.audio_meter_service
     }
 
+    pub fn caption_settings(&self) -> &CaptionSettingsService {
+        &self.caption_settings_service
+    }
+
     pub fn overlay_settings(&self) -> &OverlaySettingsService {
         &self.overlay_settings_service
+    }
+
+    pub fn model_settings(&self) -> &ModelSettingsService {
+        &self.model_settings_service
+    }
+
+    pub fn performance_settings(&self) -> &PerformanceSettingsService {
+        &self.performance_settings_service
+    }
+
+    pub fn transcripts(&self) -> &TranscriptService {
+        &self.transcript_service
+    }
+
+    pub fn translation_settings(&self) -> &TranslationSettingsService {
+        &self.translation_settings_service
+    }
+
+    pub fn asr_runtime_config(
+        &self,
+    ) -> Result<Option<AsrRuntimeConfig>, crate::app_error::AppError> {
+        self.asr_runtime_config_for_source(None)
+    }
+
+    pub fn asr_runtime_config_for_source(
+        &self,
+        source_label: Option<String>,
+    ) -> Result<Option<AsrRuntimeConfig>, crate::app_error::AppError> {
+        let caption_settings = self.caption_settings_service.load()?;
+        let caption_mode = caption_settings.mode;
+        let status = self.model_settings_service.status()?;
+        let Some(model) = status.active_model else {
+            return Ok(None);
+        };
+
+        if !model.is_installed {
+            return Ok(None);
+        }
+
+        if matches!(
+            caption_mode,
+            CaptionMode::Translate | CaptionMode::OriginalAndTranslation
+        ) && !model.supports_translation
+        {
+            return Err(crate::app_error::AppError::Asr(
+                "translation requires a multilingual Whisper model".to_string(),
+            ));
+        }
+
+        let executable_path = model
+            .executable_path
+            .as_deref()
+            .map(PathBuf::from)
+            .filter(|path| path.exists());
+
+        #[cfg(not(feature = "local-asr"))]
+        if executable_path.is_none() {
+            return Ok(None);
+        }
+
+        Ok(Some(AsrRuntimeConfig {
+            model_path: model.path.into(),
+            executable_path,
+            caption_path: self.caption_file.clone(),
+            transcript: self.transcript_service.runtime_config(),
+            caption_mode,
+            translation: if matches!(
+                caption_mode,
+                CaptionMode::Translate | CaptionMode::OriginalAndTranslation
+            ) {
+                Some(TranslationRuntimeConfig::new(
+                    self.translation_settings_service.load()?,
+                    caption_settings.translation_source_language,
+                    caption_settings.translation_target_language,
+                ))
+            } else {
+                None
+            },
+            performance: self.performance_settings_service.load()?.runtime(),
+            source_label: source_label.and_then(normalize_source_label),
+            speaker_labels_enabled: caption_settings.speaker_labels_enabled,
+        }))
     }
 
     pub fn open_caption_process(&self) -> Result<(), crate::app_error::AppError> {
@@ -51,6 +155,7 @@ impl AppState {
         let settings = self.overlay_settings_service.load()?;
         self.overlay_settings_service
             .write_runtime_settings(&settings)?;
+        write_caption_state(&self.caption_file, "", "Listening")?;
         let settings = serde_json::to_string(&settings)
             .map_err(|error| crate::app_error::AppError::Window(error.to_string()))?;
         let child = Command::new(std::env::current_exe()?)
@@ -60,6 +165,7 @@ impl AppState {
                 "FEELSAY_OVERLAY_SETTINGS_FILE",
                 self.overlay_settings_service.runtime_settings_path(),
             )
+            .env("FEELSAY_CAPTION_TEXT_FILE", &self.caption_file)
             .stdin(Stdio::null())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -94,6 +200,16 @@ impl AppState {
 
         *caption_process = None;
         Ok(false)
+    }
+
+    pub fn toggle_active_profile_click_through(&self) -> Result<bool, crate::app_error::AppError> {
+        let mut store = self.overlay_settings_service.load_store()?;
+        let mut settings = store.active_settings().clone();
+        settings.click_through = !settings.click_through;
+        let is_click_through = settings.click_through;
+        store.set_active_settings(settings);
+        self.overlay_settings_service.save_store(store)?;
+        Ok(is_click_through)
     }
 
     pub fn start_overlay_placement(
@@ -193,6 +309,11 @@ impl AppState {
         let content = serde_json::to_string(&placement).map_err(io::Error::other)?;
         fs::write(&self.placement_file, content)
     }
+}
+
+fn normalize_source_label(label: String) -> Option<String> {
+    let label = label.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!label.is_empty()).then_some(label)
 }
 
 impl Default for AppState {
